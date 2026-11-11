@@ -29,7 +29,7 @@ for t in curl tar xz zstd unzip make cmake ninja pkg-config python3 patchelf nm 
 done
 VKLIB=$( (ldconfig -p 2>/dev/null || true) | awk '/libvulkan\.so\.1 .*x86-64/ && !v {v = $NF} END {print v}')
 for c in /usr/lib/x86_64-linux-gnu/libvulkan.so.1 /usr/lib64/libvulkan.so.1 /usr/lib/libvulkan.so.1; do
-    [ -n "$VKLIB" ] || { [ -e "$c" ] && VKLIB=$c; }
+    if [ -z "$VKLIB" ] && [ -e "$c" ]; then VKLIB=$c; fi
 done
 [ -n "$VKLIB" ] || die "missing: the Vulkan loader (libvulkan.so.1)"
 [ -f /usr/include/vulkan/vulkan.h ] || die "missing: the Vulkan headers (/usr/include/vulkan/vulkan.h)"
