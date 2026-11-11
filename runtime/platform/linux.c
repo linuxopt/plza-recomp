@@ -242,8 +242,12 @@ bool gpuheap_fault(uint64_t addr);    // (runtime/nvn/vulkan/gpuheap.c)
 
 static void crash_handler(int sig, siginfo_t *si, void *ctx) {
     ucontext_t *uc = ctx;
-    if (sig == SIGSEGV && gpuheap_fault((uint64_t)(uintptr_t)si->si_addr)) return;  // (GPU memory backed at first use)
+    // The page watch first: a page it made read-only in a GPU heap chunk that is backed already was taken by
+    // gpuheap_fault ("backed meanwhile": retry) and never made writable again - the write faulted forever (RADV: three
+    // job threads spinning in a memcpy into vertex data right after the name entry, the game frozen). pagewatch_fault
+    // only claims pages it protected, so asking it first takes nothing from the GPU heap.
     if (sig == SIGSEGV && pagewatch_fault((uint64_t)(uintptr_t)si->si_addr)) return;  // (a page the renderer keeps a copy of)
+    if (sig == SIGSEGV && gpuheap_fault((uint64_t)(uintptr_t)si->si_addr)) return;  // (GPU memory backed at first use)
     static volatile int depth;
     if (sig == SIGABRT && depth++ > 0) { signal(SIGABRT, SIG_DFL); abort(); }  // (nested: just die)
     uint64_t fa = (uint64_t)(uintptr_t)si->si_addr;

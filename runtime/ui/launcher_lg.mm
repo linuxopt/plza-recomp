@@ -1156,6 +1156,7 @@ extern "C" void launcher_lg_run(const char *root) {
     int detail_i = g_settings.detail >= 0 && g_settings.detail <= 3 ? g_settings.detail : 0;
     int shadows_i = g_settings.shadows >= 0 && g_settings.shadows <= 2 ? g_settings.shadows : 0;
     bool smooth_sh = g_settings.shadow_smooth;
+    int fov_i = g_settings.fov >= 70 && g_settings.fov <= 170 ? g_settings.fov : 100;
     int sharp_i = g_settings.sharpen >= 0 && g_settings.sharpen <= 3 ? g_settings.sharpen : 0;
     int ups_i = g_settings.upscaler == UPSCALE_BILINEAR ? 1 : 0;
     int bg_i = g_settings.background >= 0 && g_settings.background <= 2 ? g_settings.background : 0;
@@ -1177,7 +1178,7 @@ extern "C" void launcher_lg_run(const char *root) {
         fps_i = fps_index(d.fps);
         wildb = d.wild_battle, prompts_i = d.button_prompts, crowd_i = d.crowd, detail_i = d.detail, shadows_i = d.shadows;
         smooth_sh = d.shadow_smooth, bg_i = d.background, pk_i = d.pkhex_link, shl_i = d.shader_nowait;
-        sharp_i = d.sharpen, ups_i = d.upscaler == UPSCALE_BILINEAR ? 1 : 0;
+        fov_i = d.fov, sharp_i = d.sharpen, ups_i = d.upscaler == UPSCALE_BILINEAR ? 1 : 0;
         gopt = k_gopt_default;
     };
     // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
@@ -1308,6 +1309,11 @@ extern "C" void launcher_lg_run(const char *root) {
         const char *const shadow_names[] = {"Switch (1024)", T("High (2048)", "Alta (2048)"), T("Ultra (4096)", "Ultra (4096)")};
         ImGui::Combo(T("Shadows", "Sombras"), &shadows_i, shadow_names, 3);
         ImGui::Checkbox(T("Smooth shadow edges", "Suavizar as bordas das sombras"), &smooth_sh);
+        ImGui::SliderInt(T("Field of view", "Campo de visão"), &fov_i, 70, 170, "%d%%");
+        fov_i = (fov_i + 5) / 10 * 10;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", T("100% is the game's own. Wider shows more around you (the game's settings: Camera tab too).",
+                                      "100% é o do jogo. Mais largo mostra mais ao redor (também na aba Câmera das configurações do jogo)."));
         const char *const ups_names[] = {"AMD FSR 1", T("Bilinear", "Bilinear")};
         ImGui::Combo(T("Upscaler", "Upscaler"), &ups_i, ups_names, 2);
         if (ImGui::IsItemHovered())
@@ -1817,6 +1823,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.shadows = shadows_i;
     g_settings.shadow_smooth = smooth_sh;
     g_settings.sharpen = sharp_i;
+    g_settings.fov = fov_i;
     g_settings.upscaler = ups_i == 1 ? UPSCALE_BILINEAR : UPSCALE_FSR1;
     g_settings.background = bg_i;
     g_settings.pkhex_link = pk_i;

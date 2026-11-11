@@ -125,6 +125,8 @@ static int get_crowd(void) { return g_settings.crowd >= 0 && g_settings.crowd <=
 static void set_crowd(int i) { g_settings.crowd = i; }
 static int get_smooth(void) { return g_settings.shadow_smooth ? 0 : 1; }
 static void set_smooth(int i) { g_settings.shadow_smooth = i == 0; }
+static int get_fov(void) { int v = (g_settings.fov - 70 + 5) / 10; return v < 0 ? 0 : v > 10 ? 10 : v; }  // (bar 0..10: 70..170 %)
+static void set_fov(int i) { g_settings.fov = 70 + 10 * i; }
 static int get_sharp(void) { return g_settings.sharpen >= 0 && g_settings.sharpen <= 3 ? g_settings.sharpen : 0; }
 static void set_sharp(int i) { g_settings.sharpen = i; }
 static int get_ups(void) { return g_settings.upscaler == UPSCALE_BILINEAR ? 1 : 0; }
@@ -148,6 +150,8 @@ static const Row k_rows[] = {  // (per tab in this order; Gameplay's first is th
     {0, "Button Prompts", "Choose which button prompts show. Auto shows the ones you are playing with.", CHOICE, 5,
      {"Auto", "Switch", "Xbox", "PlayStation", "Keyboard"}, get_prompts, set_prompts},
     {0, "Stick Dead Zone", "Choose how far a controller's sticks must move before they count.", BAR10, 0, {0}, get_dz, set_dz},
+    {0, "Field of View", "Choose how wide the camera sees: 100% is the game's own, more shows more around you.", BAR10, 0, {0},
+     get_fov, set_fov},
     {0, "Mouse Camera", "Choose whether a click in the game lets the mouse turn the camera. Esc lets it go.",
      CHOICE, 2, {"On", "Off"}, get_mcam, set_mcam},
     {0, "Mouse Sensitivity", "Choose how far the camera turns when you move the mouse.", BAR10, 0, {0}, get_msens, set_msens},

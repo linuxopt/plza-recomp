@@ -82,6 +82,8 @@ Everything from the `LegendsZA` branch of LZA-Recomp (1.1.0-rc1):
   Most Z-A cheats rewrite the game's instructions: the game code is compiled with every instruction the cheat file can
   put there (the launcher offers **Recompile game code** once, a few minutes), and from then on they switch on and off
   live; switching one off puts the game's own code back (no "Restore Code" needed). Data cheats work at once.
+- **Field of view**: Options → Graphics → *Field of view* (70–170 % of the game's own camera angle) and the game's
+  Settings → Camera → *Field of View*; it applies at once, to every camera (cutscenes too).
 - **FSR / sharpening**: Options → Graphics → *Upscaler* (AMD FSR 1: EASU upscale + RCAS, or Bilinear) applies when the
   Resolution is below the window's (e.g. 1080p on a 1440p screen); *Sharpening* (AMD RCAS: Off / Low / Medium / High)
   at the window's resolution. Both are in the game's own Settings too.

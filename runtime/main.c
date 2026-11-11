@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include "gamelib.h"
 #include "gamesetup.h"
@@ -177,6 +180,11 @@ static void boot(const char *root) {
 }
 
 int main(int argc, char **argv) {
+#if defined(__linux__) && defined(PR_SET_PTRACER)
+    // A hang can be looked at while it hangs (eu-stack / gdb -p): Yama's ptrace_scope 1 lets only a debugger that
+    // started the game attach; any of the user's own processes may now (LARECOMP_DEBUGGABLE=0: as the system says)
+    if (!getenv("LARECOMP_DEBUGGABLE") || atoi(getenv("LARECOMP_DEBUGGABLE")) != 0) prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--oodle-server")) {  // (its replies use the real stdout, which plat_init points at the log)
             extern int g_oodle_out_fd;

@@ -424,20 +424,63 @@ void za_fixes_present(void) {  // (each present: za_options_present)
     { extern uint64_t renderer_present_count(void); za_fovprobe_present(renderer_present_count()); }
 }
 
+// Field of view (Settings.fov, % of the game's own: launcher Graphics, the game's Settings > Camera). Every camera's
+// parameters reach its render block through 0x70018185e0(pool, handle, src): a copy of the 0xd0-byte block at src
+// into the pool's entry - near +0x14, far +0x18, vertical field of view +0x1c (radians: 0.524 = 30 degrees on the
+// station's platform, other scenes their own), aspect +0x20, the screen rectangle, the view matrix +0x50 and the
+// projection matrix +0x90 (what is drawn with: its x / y scales are scaled with the angle). Found 2026-11-11 with a watchpoint on the
+// view block the shadow setup (0x7000f15120) and the LOD code read (LARECOMP_ZA_FOVPROBE below). The copy gets the
+// scaled angle (src put back after it: the game's camera code keeps its own value, nothing compounds); culling and
+// shadows read the same block, so they see what is drawn. Applies at once (a change in the game's Settings too).
+// LARECOMP_ZA_FOV=<percent> overrides the setting.
+#define ZA_CAMERA_SET 0x70018185e0ull
+static int camera_set(Cpu *c, uint64_t addr) {
+    static int env = -2;
+    if (env == -2) env = getenv("LARECOMP_ZA_FOV") ? atoi(getenv("LARECOMP_ZA_FOV")) : -1;
+    int pct = env > 0 ? env : g_settings.fov;
+    uint64_t src = c->x[2];
+    static int nlog;
+    if (getenv("LARECOMP_ZA_FOV_LOG") && nlog < 40 && src >= 0x7000000000ull && src < 0x8000000000ull) {
+        const float *g = (const float *)(uintptr_t)src;
+        nlog++, LOG("[za] camera set %llx: near %g far %g fov %g aspect %g (pct %d, lr %llx)\n", (unsigned long long)src, g[5], g[6], g[7], g[8],
+                    pct, (unsigned long long)c->x[30]);
+        if (nlog == 1) {
+            char line[2048];
+            int k = 0;
+            for (int i = 0; i < 0xd0 / 4; i++) k += snprintf(line + k, sizeof line - (size_t)k, "%s%x:%g", i ? " " : "", i * 4, g[i]);
+            LOG("[za] camera block: %s\n", line);
+        }
+    }
+    if (pct == 100 || pct < 30 || pct > 300 || src < 0x7000000000ull || src >= 0x8000000000ull || (src & 3)) return 0;
+    float *f = (float *)(uintptr_t)src;
+    float nearp = f[5], farp = f[6], fov = f[7], aspect = f[8];
+    // (a perspective camera: its projection matrix at +0x90 - x scale +0x90, y scale +0xa4, -1 at +0xbc, reverse Z)
+    if (!(fov > 0.05f && fov < 2.8f && aspect > 0.9f && aspect < 4.0f && nearp > 0 && farp > nearp && f[47] == -1.0f && f[36] > 0 && f[41] > 0))
+        return 0;
+    float want = fov * (float)pct / 100.0f;
+    if (want > 2.8f) want = 2.8f;  // (160 degrees at most)
+    float k = tanf(fov * 0.5f) / tanf(want * 0.5f), m00 = f[36], m11 = f[41];
+    f[7] = want, f[36] = m00 * k, f[41] = m11 * k;  // (the angle for culling / LOD, the matrix for drawing)
+    rt_call_original(c, addr);
+    f[7] = fov, f[36] = m00, f[41] = m11;
+    return 1;
+}
+
 // Research (LARECOMP_ZA_FOVPROBE=1): the camera blocks the handle resolver 0x70002385b0 hands out - those with a
 // field of view at +0x1c (0.2..2 rad) and the screen's aspect at +0x20 - logged once each with the caller; the first
 // gets a hardware watchpoint on +0x1c (its writers: [hwwatch]). LARECOMP_ZA_FOVPROBE=<scale>: that block's +0x1c
 // multiplied by <scale> from present 2400 on (screenshots LARECOMP_SHOT_AT show what it changes).
 #define ZA_HANDLE_RESOLVE 0x70002385b0ull
 static _Atomic uint64_t g_fov_block;
+static _Atomic unsigned long g_fov_calls, g_fov_cam;
 static int fov_probe(Cpu *c, uint64_t addr) {
     uint64_t lr = c->x[30];
     rt_call_original(c, addr);
+    g_fov_calls++;
+    if (lr != 0x7000f1518cull) return 1;  // (the shadow setup's call: its result is the camera block it reads)
+    g_fov_cam++;
     uint64_t p = c->x[0];
-    float fov, asp;
     if (p < 0x7000000000ull || p >= 0x8000000000ull) return 1;
-    memcpy(&fov, (const void *)(uintptr_t)(p + 0x1c), 4), memcpy(&asp, (const void *)(uintptr_t)(p + 0x20), 4);
-    if (!(fov > 0.2f && fov < 2.0f && asp > 1.2f && asp < 2.6f)) return 1;
     static uint64_t seen[32];
     static int nseen;
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -446,10 +489,9 @@ static int fov_probe(Cpu *c, uint64_t addr) {
     for (int i = 0; i < nseen; i++) fresh &= seen[i] != p;
     if (fresh && nseen < 32) {
         seen[nseen++] = p;
-        float near_, far_;
-        memcpy(&near_, (const void *)(uintptr_t)(p + 0x14), 4), memcpy(&far_, (const void *)(uintptr_t)(p + 0x18), 4);
-        LOG("[za] fovprobe block %llx: +14 %g +18 %g fov %g aspect %g (caller %llx)\n", (unsigned long long)p, near_, far_, fov, asp,
-            (unsigned long long)lr);
+        const float *f = (const float *)(uintptr_t)p;
+        LOG("[za] fovprobe camera %llx: +0 %g %g %g %g +10 %g %g %g %g +20 %g %g %g %g +30 %g %g %g %g\n", (unsigned long long)p,
+            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]);
         if (nseen == 1) {
             extern void hwwatch_arm(uint64_t addr, uint64_t len);
             g_fov_block = p;
@@ -462,14 +504,31 @@ static int fov_probe(Cpu *c, uint64_t addr) {
 void za_fovprobe_present(uint64_t frame) {
     static float scale = -1, orig;
     if (scale < 0) scale = getenv("LARECOMP_ZA_FOVPROBE") ? (float)atof(getenv("LARECOMP_ZA_FOVPROBE")) : 0;
+    if (!getenv("LARECOMP_ZA_FOVPROBE")) return;
+    if (frame % 600 == 0)
+        LOG("[za] fovprobe: resolver %lu calls, %lu from the shadow setup\n", (unsigned long)g_fov_calls, (unsigned long)g_fov_cam);
+    const char *live = getenv("LARECOMP_LIVE");  // (<live>/fovscale: a new scale, read every 30 presents, the file removed)
+    if (live && frame % 30 == 0) {
+        char fp[1100];
+        snprintf(fp, sizeof fp, "%s/fovscale", live);
+        FILE *ff = fopen(fp, "r");
+        if (ff) {
+            float v;
+            if (fscanf(ff, "%f", &v) == 1 && v > 0.2f && v < 4) scale = v, LOG("[za] fovprobe: scale %g from now on\n", v);
+            fclose(ff);
+            remove(fp);
+        }
+    }
     uint64_t p = g_fov_block;
-    if (!p || scale <= 1.01f) return;
+    if (!p) return;
     float *f = (float *)(uintptr_t)(p + 0x1c);
-    if (frame == 2400) orig = *f, LOG("[za] fovprobe: fov %g -> %g\n", orig, orig * scale);
-    if (frame >= 2400 && orig > 0 && *f != orig * scale) {
+    if (orig <= 0) { orig = *f; LOG("[za] fovprobe: present %llu camera %llx fov %g\n", (unsigned long long)frame, (unsigned long long)p, orig); }
+    float want = orig * (scale > 0 ? scale : 1);
+    if (*f != want) {
         static int n;
-        if (n++ < 5) LOG("[za] fovprobe: present %llu fov was %g (the game wrote it back)\n", (unsigned long long)frame, *f);
-        *f = orig * scale;
+        if (n++ < 8) LOG("[za] fovprobe: present %llu fov %g (want %g)\n", (unsigned long long)frame, *f, want);
+        if (fabsf(*f - want) > 1e-4f && fabsf(*f - orig) > 1e-4f) orig = *f;  // (the game set a new one of its own: follow it)
+        *f = orig * (scale > 0 ? scale : 1);
     }
 }
 
@@ -765,6 +824,7 @@ void za_fixes_configure(const char *exefs) {
         const char *m = getenv("LARECOMP_ZA_SCENE60");
         if (!(m && atoi(m) == 0)) rt_register_fnhook_at(ZA_SCRIPT_OBJ, scene60_hook), rt_register_fnhook_at(ZA_MOVE_TO, scene60_hook);
         if (getenv("LARECOMP_ZA_FOVPROBE")) rt_register_fnhook_at(ZA_HANDLE_RESOLVE, fov_probe);
+        rt_register_fnhook_at(ZA_CAMERA_SET, camera_set);  // (the field of view setting: applies live)
         const char *b = getenv("LARECOMP_ZA_BATTLE144");
         g_battle_cap = !(b && atoi(b) == 0);
     }

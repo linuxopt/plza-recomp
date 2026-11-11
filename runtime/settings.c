@@ -26,6 +26,7 @@ static const char *settings_file(void) {
     .stick_deadzone = 0.15f,                                                \
     .reverb = true,                                                         \
     .shadow_smooth = true,                                                  \
+    .fov = 100,                                                             \
     .movie_audio = true,                                                    \
     .show_fps = false,                                                      \
     .render_thread = true,                                                  \
@@ -69,6 +70,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "mouse_camera")) g_settings.mouse_camera = atoi(val) != 0;
     else if (!strcmp(key, "mouse_invert_x")) g_settings.mouse_invert_x = atoi(val) != 0;
     else if (!strcmp(key, "mouse_invert_y")) g_settings.mouse_invert_y = atoi(val) != 0;
+    else if (!strcmp(key, "fov")) g_settings.fov = atoi(val) >= 70 && atoi(val) <= 170 ? atoi(val) : 100;
     else if (!strcmp(key, "sharpening")) g_settings.sharpen = atoi(val) >= 0 && atoi(val) <= 3 ? atoi(val) : 0;
     else if (!strcmp(key, "detail_distance")) g_settings.detail = atoi(val) >= 0 && atoi(val) <= 3 ? atoi(val) : 0;
     else if (!strcmp(key, "shadow_smoothing")) g_settings.shadow_smooth = atoi(val) != 0;
@@ -170,6 +172,7 @@ void settings_save(void) {
     if (g_settings.game_opts >= 0) fprintf(f, "game_options = 0x%06x\n", g_settings.game_opts);
     if (g_settings.game_opts_next >= 0) fprintf(f, "game_options_next = 0x%06x\n", g_settings.game_opts_next);
     fprintf(f, "sharpening = %d\n", g_settings.sharpen);
+    fprintf(f, "fov = %d\n", g_settings.fov);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
     if (g_settings.res_mode == RES_DYNAMIC) fprintf(f, "resolution = dynamic\n");
     else if (g_settings.res_mode == RES_Q75) fprintf(f, "resolution = 75%%\n");
