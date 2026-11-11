@@ -128,8 +128,10 @@ void settings_load(void) {
     fclose(f);
     // Above 60 fps is experimental (the game's logic was made for 30; Unlimited: battles misbehave): offered only with
     // "Experimental settings" on. An ini from before that switch with such a rate in it: the switch turned on for it.
-    if (!g_experimental_seen && g_settings.fps > 60) g_settings.experimental = true;
-    if (!g_settings.experimental && g_settings.fps > 60) g_settings.fps = 60;
+    // AppImage build: every frame rate is offered (scripted scenes drop to 60 and battles at Unlimited to 144 on their
+    // own: hle/za_fixes.c), so the switch is always on; an older ini's "experimental = 0" no longer clamps.
+    (void)g_experimental_seen;
+    g_settings.experimental = true;
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);

@@ -42,6 +42,9 @@ static _Atomic int g_state;
 static _Atomic float g_progress;
 static _Atomic bool g_running;
 static char g_folder[1024];
+// Packages picked one by one on the Game Files page (setup_start_files): base game, update, add-on content, keys
+static char g_files[3][1024], g_keys[1024];
+static bool g_files_mode;
 
 int setup_state(void) { return g_state; }
 float setup_progress(void) { return g_progress; }
@@ -191,9 +194,16 @@ static bool from_packages(void) {
     int err;
     char why[512] = "";
     g_state = SETUP_UNPACKING;
-    NxPkg *p = nxpkg_open(g_folder, titles, &err, why, sizeof why);
+    NxPkg *p;
+    if (g_files_mode) {
+        const char *list[3] = {g_files[0], g_files[1], g_files[2]};
+        LOG("[setup] base game %s, update %s, add-on content %s, keys %s\n", g_files[0][0] ? g_files[0] : "-",
+            g_files[1][0] ? g_files[1] : "-", g_files[2][0] ? g_files[2] : "-", g_keys[0] ? g_keys : "(searched)");
+        p = nxpkg_open_list(list, 3, g_keys, titles, &err, why, sizeof why);
+    } else
+        p = nxpkg_open(g_folder, titles, &err, why, sizeof why);
     if (!p) {
-        LOG("[setup] packages in %s: %s\n", g_folder, why);
+        LOG("[setup] packages in %s: %s\n", g_files_mode ? g_files[0] : g_folder, why);
         g_state = err == NXPKG_NO_KEYS ? SETUP_FAIL_KEYS : err == NXPKG_KEY_MISSING ? SETUP_FAIL_KEYS_OLD
                 : err == NXPKG_ONLY_UPDATE ? SETUP_FAIL_NO_BASE : err == NXPKG_COMPRESSED ? SETUP_FAIL_PACKAGE
                 : err == NXPKG_NO_GAME ? SETUP_FAIL_VERSION : SETUP_FAIL_UNPACK;
@@ -272,6 +282,12 @@ static bool dlc_dir(const char *base, bool need_key, char *out, size_t n) {
 static void *setup_thread(void *arg) {
     (void)arg;
     g_progress = 0;
+    if (g_files_mode) {  // (the packages picked one by one: straight to reading them)
+        if (from_packages() && build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
+        LOG("[setup] %s\n", g_state == SETUP_DONE ? "ready" : "failed");
+        g_running = false;
+        return NULL;
+    }
     if (!g_folder[0]) {  // only the game code (files set up already, e.g. a new version of the app)
         if (build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
         g_running = false;
@@ -313,7 +329,11 @@ static void *setup_thread(void *arg) {
             char src[1100], dst[1100];
             snprintf(src, sizeof src, "%s/%s", f.exefs, code[i]);
             snprintf(dst, sizeof dst, ROOT "/exefs/%s", code[i]);
-            ok = is_file(src) && romfs_copy_file(src, dst, copy_progress);
+            if (!is_file(src)) {  // (rtld and the subsdks are optional: Z-A has no subsdk; main, main.npdm and sdk are not)
+                ok = i == 2 || i >= 4;  // (rtld, subsdk0, subsdk1)
+                continue;
+            }
+            ok = romfs_copy_file(src, dst, copy_progress);
         }
     } else
         ok = romfs_copy_tree(f.exefs, ROOT "/exefs", copy_progress);
@@ -348,8 +368,27 @@ static void *setup_thread(void *arg) {
 
 void setup_start(const char *folder) {
     if (g_running) return;
+    g_files_mode = false;
     snprintf(g_folder, sizeof g_folder, "%s", folder ? folder : "");
     for (char *c = g_folder; *c; c++) if (*c == '\\') *c = '/';
+    g_running = true;
+    g_state = SETUP_LOOKING;
+    pthread_t t;
+    pthread_create(&t, NULL, setup_thread, NULL);
+    pthread_detach(t);
+}
+
+void setup_start_files(const char *base, const char *update, const char *dlc, const char *keys) {
+    if (g_running) return;
+    const char *in[3] = {base, update, dlc};
+    for (int i = 0; i < 3; i++) {
+        snprintf(g_files[i], sizeof g_files[i], "%s", in[i] ? in[i] : "");
+        for (char *c = g_files[i]; *c; c++) if (*c == '\\') *c = '/';
+    }
+    snprintf(g_keys, sizeof g_keys, "%s", keys ? keys : "");
+    for (char *c = g_keys; *c; c++) if (*c == '\\') *c = '/';
+    g_folder[0] = 0;
+    g_files_mode = true;
     g_running = true;
     g_state = SETUP_LOOKING;
     pthread_t t;

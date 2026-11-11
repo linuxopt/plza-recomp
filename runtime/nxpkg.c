@@ -904,21 +904,61 @@ static void read_versions(NxPkg *P) {
     }
 }
 
+bool nxpkg_find_keys(const char *near, char *out, size_t n) {
+    char folder[1024] = ".";
+    struct stat st;
+    if (near && near[0]) {
+        snprintf(folder, sizeof folder, "%s", near);
+        if (stat(near, &st) == 0 && S_ISREG(st.st_mode)) {
+            char *sl = strrchr(folder, '/');
+            if (sl) *sl = 0; else snprintf(folder, sizeof folder, ".");
+        }
+    }
+    Keys *k = calloc(1, sizeof *k);
+    bool ok = k && keys_find(k, folder);
+    if (ok) snprintf(out, n, "%s", k->path);
+    free(k);
+    return ok;
+}
+
 NxPkg *nxpkg_open(const char *path, const uint64_t *titles, int *err, char *why, size_t wn) {
+    const char *paths[1] = {path};
+    return nxpkg_open_list(paths, 1, NULL, titles, err, why, wn);
+}
+
+// A keys file picked by the player: read as is (no search). False: unreadable, or no usable header key in it.
+static bool keys_load(Keys *k, const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return false;
+    Keys t;
+    memset(&t, 0, sizeof t);
+    keys_file(&t, path);
+    keys_derive(&t);
+    if (!t.have_header) return false;
+    *k = t;
+    snprintf(k->path, sizeof k->path, "%s", path);
+    return true;
+}
+
+NxPkg *nxpkg_open_list(const char *const *paths, int npaths, const char *keys, const uint64_t *titles, int *err, char *why,
+                       size_t wn) {
     why[0] = 0;
     NxPkg *P = calloc(1, sizeof *P);
     P->base = P->dlc = -1;
     P->scratch = malloc(CHUNK + 32), P->buf = malloc(CHUNK + 32);
-    char folder[1024];
+    char folder[1024] = ".";
     struct stat st;
-    snprintf(folder, sizeof folder, "%s", path);
-    if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-        char *sl = strrchr(folder, '/');
-        if (sl) *sl = 0; else snprintf(folder, sizeof folder, ".");
+    if (npaths > 0 && paths[0] && paths[0][0]) {
+        snprintf(folder, sizeof folder, "%s", paths[0]);
+        if (stat(paths[0], &st) == 0 && S_ISREG(st.st_mode)) {
+            char *sl = strrchr(folder, '/');
+            if (sl) *sl = 0; else snprintf(folder, sizeof folder, ".");
+        }
     }
     if (!P->scratch || !P->buf) { *err = NXPKG_READ_ERROR, snprintf(why, wn, "out of memory"); nxpkg_close(P); return NULL; }
-    if (!keys_find(&P->keys, folder)) {
-        *err = NXPKG_NO_KEYS, snprintf(why, wn, "no prod.keys (with header_key) found");
+    if (keys && keys[0] ? !keys_load(&P->keys, keys) : !keys_find(&P->keys, folder)) {
+        *err = NXPKG_NO_KEYS;
+        snprintf(why, wn, keys && keys[0] ? "the keys file picked has no usable header_key" : "no prod.keys (with header_key) found");
         nxpkg_close(P);
         return NULL;
     }
@@ -928,7 +968,12 @@ NxPkg *nxpkg_open(const char *path, const uint64_t *titles, int *err, char *why,
     char *sl = strrchr(tk, '/');
     snprintf(sl ? sl + 1 : tk, sizeof tk - (size_t)(sl ? sl + 1 - tk : 0), "title.keys");
     title_keys_file(P, tk);
-    scan(P, path, 0, false, NULL);
+    for (int i = 0; i < npaths; i++) {  // (each package once: the same file picked twice is read once)
+        if (!paths[i] || !paths[i][0]) continue;
+        bool dup = false;
+        for (int j = 0; j < i; j++) dup |= paths[j] && !strcmp(paths[j], paths[i]);
+        if (!dup) scan(P, paths[i], 0, false, NULL);
+    }
     read_versions(P);
     for (int i = 0; i < P->nnca; i++)
         if (P->ncas[i].type == 0 || P->ncas[i].type >= 4)

@@ -9,7 +9,7 @@
 // chooses). The choices go to larecomp.ini (settings.c; bind_key_* from runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
-// from that folder at once; LARECOMP_MOD_INSTALL=<file or folder> installs a translation at once;
+// from that folder at once; LARECOMP_SETUP_FILES=<base>|<update>|<dlc>|<keys> from those packages; LARECOMP_MOD_INSTALL=<file or folder> installs a translation at once;
 // LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section, =<slot> also waits for a new key for that input
 // (runtime/input_bind.h BIND_*), and <slot>:<key name> presses that key for it; LARECOMP_LAUNCHER_PAGE=options|
 // controls|files|mods opens that launcher page; LARECOMP_LAUNCHER_SIZE=<w>x<h> makes the launcher's window that size.
@@ -35,6 +35,7 @@
 extern "C" void vk_describe_gpu(char *name, size_t n, int *vram_gb, bool *integrated);  // nvn/vulkan/device.c
 extern "C" {
 #include "gamesetup.h"
+#include "nxpkg.h"
 #include "input_bind.h"
 #include "mods.h"
 #include "platform.h"
@@ -357,6 +358,17 @@ static void SDLCALL picked_game(void *, const char *const *files, int) {
     snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
     pthread_mutex_unlock(&g_pick_lock);
 }
+// The Game Files page's four pickers (base game, update, add-on content, prod.keys): slot = userdata
+enum { PICK_BASE, PICK_UPDATE, PICK_DLC, PICK_KEYS, PICK_N };
+static char g_pick_file[PICK_N][1024];
+static void SDLCALL picked_file(void *slot, const char *const *files, int) {
+    if (!files || !files[0]) return;
+    int k = (int)(intptr_t)slot;
+    if (k < 0 || k >= PICK_N) return;
+    pthread_mutex_lock(&g_pick_lock);
+    snprintf(g_pick_file[k], sizeof g_pick_file[k], "%s", files[0]);
+    pthread_mutex_unlock(&g_pick_lock);
+}
 static void SDLCALL picked_mod(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
@@ -429,6 +441,133 @@ static bool take(char *slot, char *out, size_t n) {
 // ------------------------------------------------------------------ the game files section
 static const ImVec4 k_green(0.45f, 0.85f, 0.50f, 1), k_red(1.0f, 0.45f, 0.40f, 1), k_yellow(1.0f, 0.82f, 0.35f, 1);
 
+// The packages, picked one by one: the base game, the 2.0.2 update, the add-on content (optional) and prod.keys. The
+// choices are kept in gamefiles.ini (the data root) for the next start; prod.keys found in the usual places (beside the
+// packages, ~/.switch, the emulators' key folders) is offered when none was picked. Then Recompile reads them
+// (runtime/gamesetup.c setup_start_files) and builds the game code. Already extracted files: the folder button below.
+static char g_files[PICK_N][1024];
+static bool g_files_loaded;
+static void files_save(void) {
+    FILE *f = fopen("gamefiles.ini", "w");
+    if (!f) return;
+    static const char *const key[PICK_N] = {"base", "update", "dlc", "keys"};
+    for (int i = 0; i < PICK_N; i++) fprintf(f, "%s = %s\n", key[i], g_files[i]);
+    fclose(f);
+}
+static void files_load(void) {
+    g_files_loaded = true;
+    FILE *f = fopen("gamefiles.ini", "r");
+    if (!f) return;
+    static const char *const key[PICK_N] = {"base", "update", "dlc", "keys"};
+    char line[1200];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *eq = strstr(line, " = ");
+        if (!eq) continue;
+        *eq = 0;
+        for (int i = 0; i < PICK_N; i++)
+            if (!strcmp(line, key[i])) snprintf(g_files[i], sizeof g_files[i], "%s", eq + 3);
+    }
+    fclose(f);
+}
+static bool file_there(const char *p) {
+    struct stat st;
+    return p[0] && stat(p, &st) == 0;
+}
+static const char *base_name(const char *p) {
+    const char *s = strrchr(p, '/'), *b = strrchr(p, '\\');
+    if (b > s) s = b;
+    return s ? s + 1 : p;
+}
+static void game_files_pickers(SDL_Window *win, bool ready) {
+    if (!g_files_loaded) files_load();
+    char got[1024];
+    bool changed = false;
+    for (int i = 0; i < PICK_N; i++)
+        if (take(g_pick_file[i], got, sizeof got)) snprintf(g_files[i], sizeof g_files[i], "%s", got), changed = true;
+    if (changed) files_save();
+    // prod.keys: the one picked, else where it would be found (beside the base game, ~/.switch, the emulators')
+    static char auto_keys[1024];
+    static char auto_for[1024] = "\x01";
+    if (strcmp(auto_for, g_files[PICK_BASE])) {
+        snprintf(auto_for, sizeof auto_for, "%s", g_files[PICK_BASE]);
+        if (!nxpkg_find_keys(g_files[PICK_BASE][0] ? g_files[PICK_BASE] : NULL, auto_keys, sizeof auto_keys)) auto_keys[0] = 0;
+    }
+    static const SDL_DialogFileFilter pkg_filter[] = {{"Switch packages (.nsp, .xci)", "nsp;xci;NSP;XCI"}, {"All files", "*"}};
+    static const SDL_DialogFileFilter keys_filter[] = {{"Keys (prod.keys, keys.txt)", "keys;txt"}, {"All files", "*"}};
+    struct Row { int slot; const char *en, *pt, *hint_en, *hint_pt; bool optional; };
+    static const Row rows[PICK_N] = {
+        {PICK_BASE, "Base game", "Jogo base", "Pokémon Legends: Z-A (1.0.0), .nsp or .xci", "Pokémon Legends: Z-A (1.0.0), .nsp ou .xci", false},
+        {PICK_UPDATE, "Game update", "Atualização", "Update 2.0.2 (v393216), .nsp", "Atualização 2.0.2 (v393216), .nsp", false},
+        {PICK_DLC, "Mega Dimension DLC", "DLC Mega Dimension", "Optional, .nsp", "Opcional, .nsp", true},
+        {PICK_KEYS, "prod.keys", "prod.keys", "Dumped from your Switch with Lockpick_RCM", "Dump do seu Switch com o Lockpick_RCM", false},
+    };
+    ImGui::Spacing();
+    ImGui::SeparatorText(T("Your game dumps", "Os dumps do seu jogo"));
+    bool busy = setup_running();
+    if (ImGui::BeginTable("##files", 3, ImGuiTableFlags_SizingFixedFit, ImVec2(ImGui::GetContentRegionAvail().x - 12, 0))) {
+        ImGui::TableSetupColumn("what", ImGuiTableColumnFlags_WidthFixed, 230);
+        ImGui::TableSetupColumn("file", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("buttons", ImGuiTableColumnFlags_WidthFixed, 240);
+        for (const Row &r : rows) {
+            ImGui::PushID(r.slot);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(T(r.en, r.pt));
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            const char *p = g_files[r.slot];
+            if (p[0] && file_there(p)) ImGui::TextColored(k_green, "%s", base_name(p));
+            else if (p[0]) ImGui::TextColored(k_red, "%s %s", base_name(p), T("(not found)", "(não encontrado)"));
+            else if (r.slot == PICK_KEYS && auto_keys[0]) ImGui::TextColored(k_yellow, "%s %s", T("found:", "encontrado:"), auto_keys);
+            else ImGui::TextDisabled("%s", T(r.hint_en, r.hint_pt));
+            if (p[0] && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", p);
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(busy);
+            if (ImGui::Button(T("Browse...", "Procurar..."), ImVec2(r.optional || p[0] ? 140 : 228, 0))) {
+                if (r.slot == PICK_KEYS) SDL_ShowOpenFileDialog(picked_file, (void *)(intptr_t)r.slot, win, keys_filter, 2, NULL, false);
+                else SDL_ShowOpenFileDialog(picked_file, (void *)(intptr_t)r.slot, win, pkg_filter, 2, NULL, false);
+            }
+            if (r.optional || p[0]) {
+                ImGui::SameLine();
+                if (ImGui::Button(T("Clear", "Limpar"), ImVec2(80, 0))) g_files[r.slot][0] = 0, files_save();
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    bool have_base = file_there(g_files[PICK_BASE]), have_upd = file_there(g_files[PICK_UPDATE]);
+    bool have_keys = file_there(g_files[PICK_KEYS]) || (!g_files[PICK_KEYS][0] && auto_keys[0]);
+    bool dlc_ok = !g_files[PICK_DLC][0] || file_there(g_files[PICK_DLC]);
+    bool can = have_base && have_upd && have_keys && dlc_ok && !busy;
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!can);
+    if (ImGui::Button(ready ? T("Set up and recompile from these files", "Preparar e recompilar com estes arquivos")
+                            : T("Recompile the game", "Recompilar o jogo"), ImVec2(-FLT_MIN, 44)))
+        setup_start_files(g_files[PICK_BASE], g_files[PICK_UPDATE], g_files[PICK_DLC],
+                          g_files[PICK_KEYS][0] ? g_files[PICK_KEYS] : auto_keys);
+    ImGui::EndDisabled();
+    if (!can && !busy) {
+        const char *need = !have_base ? T("Pick the base game.", "Escolha o jogo base.")
+                         : !have_upd ? T("Pick the 2.0.2 update.", "Escolha a atualização 2.0.2.")
+                         : !have_keys ? T("Pick your prod.keys.", "Escolha o seu prod.keys.")
+                         : T("The DLC file picked isn't there: pick it again or clear it.", "O arquivo do DLC não está lá: escolha de novo ou limpe.");
+        ImGui::TextDisabled("%s", need);
+    }
+    ImGui::Spacing();
+    ImGui::SeparatorText(T("Or: already extracted files", "Ou: arquivos já extraídos"));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 900);
+    ImGui::TextDisabled("%s", T("A folder with exefs (main, sdk, main.npdm) and romfs (arc/data.trpfs) of Z-A 2.0.2, or a folder of .nsp / .xci files.",
+                                "Uma pasta com o exefs (main, sdk, main.npdm) e o romfs (arc/data.trpfs) do Z-A 2.0.2, ou uma pasta com .nsp / .xci."));
+    ImGui::PopTextWrapPos();
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button(T("Select game folder...", "Selecionar pasta do jogo..."), ImVec2(-FLT_MIN, 0)))
+        SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
+    ImGui::EndDisabled();
+}
+
 static void game_files_section(SDL_Window *win) {
     ImGui::SeparatorText(T("Game files", "Arquivos do jogo"));
     int st = setup_state();
@@ -451,8 +590,12 @@ static void game_files_section(SDL_Window *win) {
         ImGui::TextColored(k_green, g_pt ? "Pokémon %s - pronto para jogar" : "Pokémon %s - ready to play",
                            name ? name : "Legends: Z-A");
         ImGui::SameLine();
-        if (ImGui::SmallButton(T("Change...", "Trocar..."))) SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
-        if (st < SETUP_FAIL_NOT_FOUND) return;  // (a failed change: why, below - the game files set up before still play)
+        ImGui::SameLine();
+        if (ImGui::SmallButton(T("Recompile game code", "Recompilar o código do jogo"))) setup_start(NULL);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", T("Builds the game code for this PC again from the game files set up already.",
+                                      "Compila o código do jogo de novo para este PC a partir dos arquivos já preparados."));
+        if (st < SETUP_FAIL_NOT_FOUND) { game_files_pickers(win, ready); return; }  // (a failed change: why, below)
     }
     // (game files set up by an earlier release from another Z-A version: asked for again, as a failed setup would)
     if (!ready && st < SETUP_FAIL_NOT_FOUND && game_za_unsupported("extracted/exefs")) st = SETUP_FAIL_ZA_VERSION;
@@ -469,14 +612,14 @@ static void game_files_section(SDL_Window *win) {
                                          "É preciso o Pokémon Legends: Z-A versão 2.0.2; esses arquivos são de outra versão.",
                                          "Nenhuma chave encontrada para esses arquivos (prod.keys).", "As suas chaves não abrem esses arquivos.",
                                          "Só a atualização foi encontrada, não o jogo base.", "Esses arquivos do jogo não puderam ser lidos."};
-        static const char *const en_h[] = {"Choose the folder with your .nsp / .xci files, or the one that holds exefs and romfs.",
+        static const char *const en_h[] = {"Pick your base game, its 2.0.2 update and prod.keys below, or a folder that holds exefs and romfs.",
                                            "Decompress them first (nsz -D), or dump them as .nsp / .xci.",
                                            "Pick the folder of your own Pokémon Legends: Z-A.", "Check there are about 6 GB free and try again.",
                                            "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again.",
                                            "Update the game to 2.0.2 on your Switch, dump the base game and the update, and put both in one folder (README).",
-                                           "Dump prod.keys from your own Switch and put it next to the game files (or in .switch in your home folder).",
+                                           "Dump prod.keys from your own Switch and pick it below (prod.keys).",
                                            "Dump prod.keys again from your Switch on its current system version; details in lasrecomp.log.",
-                                           "Put the base game's .nsp / .xci in the same folder as the update.",
+                                           "Pick the base game's .nsp / .xci as well as the update.",
                                            "The dump may be damaged; details in lasrecomp.log."};
         static const char *const pt_h[] = {"Escolha a pasta com os seus arquivos .nsp / .xci, ou a que tem exefs e romfs.",
                                            "Descomprima antes (nsz -D), ou faça o dump como .nsp / .xci.",
@@ -492,16 +635,8 @@ static void game_files_section(SDL_Window *win) {
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
         ImGui::PopTextWrapPos();
-    } else {
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 900);
-        ImGui::TextUnformatted(T("Select the folder with your own Pokémon Legends: Z-A: the dumped base game and 2.0.2 update "
-                                 "(.nsp / .xci, with your prod.keys), or the extracted exefs and romfs.",
-                                 "Selecione a pasta com o seu Pokémon Legends: Z-A: o dump do jogo base e da atualização 2.0.2 "
-                                 "(.nsp / .xci, com o seu prod.keys), ou o exefs e o romfs extraídos."));
-        ImGui::PopTextWrapPos();
     }
-    if (!ready && ImGui::Button(T("Select game folder...", "Selecionar pasta do jogo..."), ImVec2(-FLT_MIN, 0)))
-        SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
+    game_files_pickers(win, ready);
 }
 
 // ------------------------------------------------------------------ the launcher's look
@@ -1020,6 +1155,16 @@ extern "C" void launcher_lg_run(const char *root) {
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
+    if (const char *sf = getenv("LARECOMP_SETUP_FILES")) {  // (tests: "<base>|<update>|<dlc>|<keys>", as if picked and Recompile pressed)
+        char f[4][1024] = {{0}};
+        const char *q = sf;
+        for (int i = 0; i < 4 && q; i++) {
+            const char *e = strchr(q, '|');
+            snprintf(f[i], sizeof f[i], "%.*s", e ? (int)(e - q) : (int)strlen(q), q);
+            q = e ? e + 1 : NULL;
+        }
+        setup_start_files(f[0], f[1], f[2], f[3]);
+    }
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
     static const float bg[4] = {0.08f, 0.08f, 0.10f, 1};
 #ifdef _WIN32
@@ -1035,35 +1180,22 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::Combo(T("Resolution", "Resolução"), &res, g_pt ? res_pt : res_en, 6);
         if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full) && classic) SDL_SetWindowFullscreen(win, full);  // (launcher: at Play)
         ImGui::Checkbox(T("Anti-aliasing (SMAA)", "Suavizar serrilhado (SMAA)"), &smaa);
-        static const char *const fps_names_en[] = {"30 fps", "60 fps", "72 fps", "120 fps", "144 fps", "Unlimited"};  // (above 60: Experimental settings)
+        static const char *const fps_names_en[] = {"30 fps", "60 fps", "72 fps", "120 fps", "144 fps", "Unlimited"};
         static const char *const fps_names_pt[] = {"30 fps", "60 fps", "72 fps", "120 fps", "144 fps", "Ilimitada"};
-        if (!experimental && fps_i > 1) fps_i = 1;
-        ImGui::Combo(T("Frame rate", "Taxa de quadros"), &fps_i, g_pt ? fps_names_pt : fps_names_en, experimental ? 6 : 2);
+        ImGui::Combo(T("Frame rate", "Taxa de quadros"), &fps_i, g_pt ? fps_names_pt : fps_names_en, 6);
         if (fps_i >= 1 && fps_i <= 4)  // (Unlimited: always real time, hle/fps60.c)
             ImGui::Checkbox(T("Keep full speed when the frame rate dips", "Manter a velocidade total quando a taxa de quadros cai"), &realtime);
-        if (fps_i >= 2)  // (72 / 120 / 144 / Unlimited: the game's own logic was made for 30; some of it counts frames)
-            ImGui::TextColored(k_yellow, "%s",
-                               fps_i == 5 ? T("Unlimited is unfinished: in battles, Pokémon and trainers can misbehave (a Pokémon sent\n"
-                                              "out may not appear, moves can take long to choose). Use 144 or lower for battles.",
-                                              "Ilimitada ainda não está pronta: em batalhas, Pokémon e treinadores podem se comportar mal\n"
-                                              "(um Pokémon enviado pode não aparecer, golpes podem demorar). Use 144 ou menos para batalhas.")
-                                          : T("Above 60 fps is experimental. Some scripted scenes can stall at these rates\n"
-                                              "(a cutscene that walks you somewhere may never let go of you). If that happens,\n"
-                                              "set 60 or 30 fps in the game's Settings and step into the scene again.",
-                                              "Acima de 60 fps é experimental. Algumas cenas com script podem travar nessas taxas\n"
-                                              "(uma cena que leva você a algum lugar pode nunca soltar o controle). Se acontecer,\n"
-                                              "escolha 60 ou 30 fps nas configurações do jogo e entre na cena de novo."));
+        if (fps_i >= 2) {  // (72 / 120 / 144 / Unlimited: the game's own logic was made for 30; the guards in hle/za_fixes.c)
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", fps_i == 5 ? T("Scripted scenes play at 60 fps and battles at up to 144 fps on their own, then the game goes "
+                                                    "back to Unlimited.",
+                                                    "Cenas com script rodam a 60 fps e batalhas a até 144 fps sozinhas, depois o jogo volta "
+                                                    "para Ilimitada.")
+                                                : T("Scripted scenes play at 60 fps on their own, then the game goes back to this frame rate.",
+                                                    "Cenas com script rodam a 60 fps sozinhas, depois o jogo volta para esta taxa de quadros."));
+            ImGui::PopStyleColor();
+        }
         ImGui::Checkbox(T("Show FPS counter", "Mostrar contador de FPS"), &showfps);
-        ImGui::Spacing();
-        ImGui::Checkbox(T("Experimental settings", "Configurações experimentais"), &experimental);
-        ImGui::Indent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", T("Settings that aren't finished yet: frame rates above 60 (72, 120, 144, Unlimited). Shown here and in "
-                                   "the game's Settings only while this is on.",
-                                   "Configurações ainda não terminadas: taxas de quadros acima de 60 (72, 120, 144, Ilimitada). Aparecem "
-                                   "aqui e nas configurações do jogo só com isto ligado."));
-        ImGui::PopStyleColor();
-        ImGui::Unindent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
     };
     auto settings_graphics = [&]() {  // (the game's Settings rows of the same names: runtime/hle/za_options.c)
         const char *const crowd_names[] = {"Switch", "2x", "4x", "Max"};
@@ -1456,8 +1588,8 @@ extern "C" void launcher_lg_run(const char *root) {
                     ImGui::EndTabBar();
                 }
             } else if (page == PAGE_FILES) {
-                ImGui::TextWrapped("%s", T("Your own Pokémon Legends: Z-A 2.0.2: pick the folder with the dumped base game and update "
-                                           "(.nsp / .xci, with your prod.keys) or the extracted exefs and romfs. They are set up once "
+                ImGui::TextWrapped("%s", T("Your own Pokémon Legends: Z-A 2.0.2: pick the dumped base game, its update and your prod.keys "
+                                           "(or a folder with the extracted exefs and romfs), then Recompile. They are set up once "
                                            "and the game code is recompiled for this PC.",
                                            "O seu Pokémon Legends: Z-A 2.0.2: escolha a pasta com o dump do jogo base e da atualização "
                                            "(.nsp / .xci, com o seu prod.keys) ou o exefs e o romfs extraídos. Eles são preparados uma vez "
@@ -1557,8 +1689,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
     g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
-    if (!experimental && fps_i > 1) fps_i = 1;
-    g_settings.experimental = experimental;
+    g_settings.experimental = experimental = true;  // (every frame rate offered: the guards in hle/za_fixes.c)
     g_settings.fps = fps_vals[fps_i >= 0 && fps_i < 6 ? fps_i : 0];
     g_settings.wild_battle = wildb;
     g_settings.show_fps = showfps;

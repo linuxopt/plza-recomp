@@ -78,8 +78,8 @@ static int find(const int *v, int n, int x) {
 static int get_fps(void) { return find(k_fps, 6, g_settings.next_fps ? g_settings.next_fps : g_settings.fps); }
 // (120 / 144: the game's own logic was made for 30 and some of it counts frames; the row's description says so while
 // one of them is chosen - shown again right after the change, settings_screen_buttons)
-static const char *const k_fps_warning = "Experimental: scripted scenes play at 60 fps. If you get stuck, set 60 or 30 fps.",
-                         *const k_unl_warning = "Unfinished: in battles, Pokémon and trainers can misbehave. Use 144 fps or lower for battles.";
+static const char *const k_fps_warning = "Scripted scenes play at 60 fps on their own, then this frame rate again.",
+                         *const k_unl_warning = "Scripted scenes play at 60 fps and battles at up to 144 fps on their own.";
 static int g_info_pending = -1;  // (a row whose description is to be drawn again)
 bool legends_set_fps(int fps);  // runtime/hle/fps60.c: at once
 static void set_fps(int i) {
@@ -181,7 +181,7 @@ static const Row k_rows[] = {  // (per tab in this order; Gameplay's first is th
 #define NROWS (int)(sizeof k_rows / sizeof *k_rows)
 static int nchoice(const void *row) {
     const Row *w = row;
-    return w->get == get_fps && !g_settings.experimental ? 2 : w->n;
+    return w->n;  // (every frame rate: the guards in hle/za_fixes.c)
 }
 static int g_first[NROWS];  // CHOICE rows of more than 3: the first of the three shown
 

@@ -49,6 +49,9 @@ bool game_za_unsupported(const char *exefs);
 const char *game_version(const char *exefs);
 // Starts a setup from the picked folder (NULL: only rebuild the game code from files set up already).
 void setup_start(const char *folder);
+// Starts a setup from packages picked one by one: the base game, its update and (optional, NULL / "") the add-on
+// content (.nsp / .xci files), read with the keys file picked (NULL / "": prod.keys searched for as usual).
+void setup_start_files(const char *base, const char *update, const char *dlc, const char *keys);
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);

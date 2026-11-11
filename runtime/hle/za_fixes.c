@@ -153,6 +153,7 @@ static int anim_gate_b(Cpu *c, uint64_t addr) {
 // since the player's last update / (1/30 s), so a late frame doesn't leave it behind its audio. LARECOMP_ZA_CUTSCENE_SPEED=0: off; LARECOMP_ZA_CUTSCENE_LOG=1: the first steps,
 // 2: each player's updates, real time and advance once a second. (s1 is the frame time, s2 the player's rate: 0.5 for
 // the cutscenes, which step 1.0 an update, 1 for the battles' players, which step s1 x 60 x s2 - by time already.)
+static void battle_seen(void);  // (below: battles at Unlimited held at 144)
 #define ZA_TIMELINE_SET_TIME 0x700102d380ull  // (player time object, s0 new time, s1 seconds, s2 rate)
 #define ZA_TIMELINE_SET_RET 0x70010275ecull   // (the call from the player's update, x19 = the player)
 static int timeline_step(Cpu *c, uint64_t addr) {
@@ -169,7 +170,7 @@ static int timeline_step(Cpu *c, uint64_t addr) {
     // it already steps by time, frame time (s1) x 60 x rate (s2), and scaling those again ran them at a quarter speed
     // at 144 fps (the trainer's ball behind her arm; "You are challenged by ...!" not taking A for seconds)
     float by_time = s1 * 60.0f * s2;
-    if (by_time > 0 && fabsf((t - old) - by_time) <= 0.1f * by_time) return 0;
+    if (by_time > 0 && fabsf((t - old) - by_time) <= 0.1f * by_time) { battle_seen(); return 0; }
     // the real time since this player's last update (the audio plays in real time: a frame late - a stutter, a shader
     // compiled - is made up on the next one), our frame time on its first, 100 ms at most
     static struct { uint64_t player, at; } last[32];
@@ -368,24 +369,57 @@ static int mouse_look_hook(Cpu *c, uint64_t addr) {
 // From its first call (or a scripted walk's, 0x7000ae3cb0) to 4 s after the last. LARECOMP_ZA_SCENE60=0: off.
 #define ZA_SCRIPT_OBJ 0x7001517e30ull
 #define ZA_MOVE_TO 0x7000ae3cb0ull
+// Battles at Unlimited (above 144 fps): Pokémon and trainers misbehaved there (a Pokémon sent out not appearing, moves
+// slow to be chosen) while 30-144 fps battles play right - the game's battle logic counts steps that get too short
+// above 144. The battles' timelines are the ones the game steps by time (timeline_step's by_time players: the battle
+// intro, the text waiting for A, the moves' animations); while any of them runs, and for 6 s after the last, the frame
+// rate is held at 144 at most. LARECOMP_ZA_BATTLE144=0: off; LARECOMP_ZA_BATTLE_S=<seconds>: the hold.
+// Both caps (scripted scenes 60, battles 144) share one restore: the lowest one in force wins, the player's own rate
+// comes back when none is.
 bool legends_set_fps(int fps);  // runtime/hle/fps60.c
-static int g_move_fps;          // the frame rate to come back to (0: not lowered)
-static _Atomic uint64_t g_move_until;  // (plat_now_ns)
+static int g_cap_from;          // the frame rate to come back to (0: not lowered)
+static int g_cap_now;           // the rate in force while lowered
+static _Atomic uint64_t g_move_until, g_battle_until;  // (plat_now_ns)
+static bool g_battle_cap = true;
+static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;  // (game threads and the present: one at a time)
+static void fps_cap_update(void) {
+    pthread_mutex_lock(&g_cap_lock);
+    uint64_t now = plat_now_ns();
+    int base = g_cap_from ? g_cap_from : g_settings.fps;
+    int want = 0;
+    if (base > 60 && now < atomic_load(&g_move_until)) want = 60;
+    else if (g_battle_cap && base > 144 && now < atomic_load(&g_battle_until)) want = 144;
+    if (want && want != g_cap_now) {
+        if (legends_set_fps(want)) {
+            if (!g_cap_from) g_cap_from = g_settings.fps;
+            g_cap_now = want;
+            LOG("[za] %s: %d fps for now\n", want == 60 ? "scripted scene" : "battle", want);
+        }
+    } else if (!want && g_cap_from) {
+        int f = g_cap_from;
+        g_cap_from = g_cap_now = 0;
+        if (g_settings.fps == f) legends_set_fps(f), LOG("[za] back to %d fps\n", f);  // (unless the player changed it meanwhile)
+    }
+    pthread_mutex_unlock(&g_cap_lock);
+}
 static int scene60_hook(Cpu *c, uint64_t addr) {
     (void)c, (void)addr;
-    if (g_settings.fps <= 60) return 0;
+    if (g_settings.fps <= 60 && !g_cap_from) return 0;
     static uint64_t hold = 0;  // (LARECOMP_ZA_SCENE60_S=<seconds>: research)
     if (!hold) hold = getenv("LARECOMP_ZA_SCENE60_S") ? (uint64_t)atoi(getenv("LARECOMP_ZA_SCENE60_S")) * 1000000000ull : 4000000000ull;
     atomic_store(&g_move_until, plat_now_ns() + hold);
-    if (!g_move_fps && legends_set_fps(60)) g_move_fps = g_settings.fps, LOG("[za] scripted scene: 60 fps for now\n");
+    fps_cap_update();
     return 0;
 }
+static void battle_seen(void) {  // (timeline_step: a battle's timeline stepped)
+    if (!g_battle_cap || (g_settings.fps <= 144 && !g_cap_from)) return;
+    static uint64_t hold = 0;
+    if (!hold) hold = getenv("LARECOMP_ZA_BATTLE_S") ? (uint64_t)atoi(getenv("LARECOMP_ZA_BATTLE_S")) * 1000000000ull : 6000000000ull;
+    atomic_store(&g_battle_until, plat_now_ns() + hold);
+    fps_cap_update();
+}
 void za_fixes_present(void) {  // (each present: za_options_present)
-    if (g_move_fps && plat_now_ns() > atomic_load(&g_move_until)) {
-        int f = g_move_fps;
-        g_move_fps = 0;
-        if (g_settings.fps == f) legends_set_fps(f);  // (unless the player changed it meanwhile)
-    }
+    if (g_cap_from) fps_cap_update();
 }
 
 // Draw distance for people. The game draws at most 20 characters (people and their Pokemon) in full at once: the
@@ -679,6 +713,8 @@ void za_fixes_configure(const char *exefs) {
     {
         const char *m = getenv("LARECOMP_ZA_SCENE60");
         if (!(m && atoi(m) == 0)) rt_register_fnhook_at(ZA_SCRIPT_OBJ, scene60_hook), rt_register_fnhook_at(ZA_MOVE_TO, scene60_hook);
+        const char *b = getenv("LARECOMP_ZA_BATTLE144");
+        g_battle_cap = !(b && atoi(b) == 0);
     }
     const char *lod = getenv("LARECOMP_ZA_NPC_LOD");
     if (!(lod && atoi(lod))) {

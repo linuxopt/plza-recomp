@@ -97,10 +97,11 @@ void rt_paths_init(void) {
 #ifdef _WIN32
         snprintf(root, sizeof root, "%s", g_exe_dir);
 #elif defined(__linux__)
-        // (the AppImage is read-only): $XDG_DATA_HOME/lasrecomp, ~/.local/share/lasrecomp by default
+        // (the AppImage is read-only): $XDG_DATA_HOME/<RT_DATA_DIR>, ~/.local/share/zarecomp for Z-A by default (its own
+        // folder: an Arceus AppImage beside it keeps its game files, saves and settings apart)
         const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
-        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/plarecomp", xdg);
-        else snprintf(root, sizeof root, "%s/.local/share/plarecomp", home && *home ? home : "/tmp");
+        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/" RT_DATA_DIR, xdg);
+        else snprintf(root, sizeof root, "%s/.local/share/" RT_DATA_DIR, home && *home ? home : "/tmp");
 #else
         const char *home = getenv("HOME");
         snprintf(root, sizeof root, "%s/Library/Application Support/" RT_BUNDLE_ID, home && *home ? home : "/tmp");
