@@ -455,6 +455,28 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0);\n"
                "}\n";
     }
+    // The render reduced to the window's size by the exact area average (present.frag's): a.xy = input texels per
+    // output pixel, b.xy = the input's size. (Sharpening then works per window pixel: exec.c post_process.)
+    if (!strcmp(name, "area.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec2 r = pc.a.xy, lo = floor(gl_FragCoord.xy) * r, hi = lo + r;\n"
+               "  ivec2 a = ivec2(floor(lo)), b = ivec2(ceil(hi)) - 1, m = ivec2(pc.b.xy) - 1;\n"
+               "  vec3 s = vec3(0.0); float ws = 0.0;\n"
+               "  for (int y = a.y; y <= min(b.y, a.y + 8); y++) {\n"
+               "    float wy = min(hi.y, float(y + 1)) - max(lo.y, float(y));\n"
+               "    for (int x = a.x; x <= min(b.x, a.x + 8); x++) {\n"
+               "      float w = wy * (min(hi.x, float(x + 1)) - max(lo.x, float(x)));\n"
+               "      s += w * texelFetch(t, clamp(ivec2(x, y), ivec2(0), m), 0).rgb; ws += w;\n"
+               "    }\n"
+               "  }\n"
+               "  o = vec4(s / max(ws, 1e-6), 1.0);\n"
+               "}\n";
+    }
     if (!strcmp(name, "clear.vert")) {
         *stage = STAGE_VERTEX;
         return "#version 450\n"

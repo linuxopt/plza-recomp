@@ -246,6 +246,8 @@ int main(int argc, char **argv) {
                 LOG("[boot] %s: Legends Z-A, but not 2.0.2 (main B1F12FD919EAE86A) - this build needs Z-A 2.0.2; its fixes and options stay off\n", exefs);
             extern void za_fixes_configure(const char *exefs);  // (runtime/hle/za_fixes.c: Legends Z-A workarounds)
             za_fixes_configure(exefs);
+            extern void cheats_load(void);  // (runtime/cheats.c: cheats/<build id>.txt and which are on)
+            cheats_load();
         }
         { extern void fps60_configure(void); fps60_configure(); }  // (runtime/hle/fps60.c: the launcher's 60 fps option)
         {   // (runtime/hle/fps60.c: the same option, Legends: Arceus)

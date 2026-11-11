@@ -940,8 +940,26 @@ static bool keys_load(Keys *k, const char *path) {
     return true;
 }
 
+static NxPkg *open_list(const char *const *paths, int npaths, const char *keys, const uint64_t *titles, int *err, char *why,
+                        size_t wn, bool dlc_only);
 NxPkg *nxpkg_open_list(const char *const *paths, int npaths, const char *keys, const uint64_t *titles, int *err, char *why,
                        size_t wn) {
+    return open_list(paths, npaths, keys, titles, err, why, wn, false);
+}
+
+bool nxpkg_write_dlc_only(const char *pkg, const char *keys, uint64_t title, const char *out, char *why, size_t wn) {
+    const uint64_t titles[2] = {title, 0};
+    const char *paths[1] = {pkg};
+    int err;
+    NxPkg *P = open_list(paths, 1, keys, titles, &err, why, wn, true);
+    if (!P) return false;
+    bool ok = P->dlc >= 0 ? nxpkg_write_dlc(P, out, why, wn) : (snprintf(why, wn, "no add-on content of this game in that file"), false);
+    nxpkg_close(P);
+    return ok;
+}
+
+static NxPkg *open_list(const char *const *paths, int npaths, const char *keys, const uint64_t *titles, int *err, char *why,
+                        size_t wn, bool dlc_only) {
     why[0] = 0;
     NxPkg *P = calloc(1, sizeof *P);
     P->base = P->dlc = -1;
@@ -982,7 +1000,8 @@ NxPkg *nxpkg_open_list(const char *const *paths, int npaths, const char *keys, c
     for (const uint64_t *t = titles; *t && P->base < 0; t++)
         for (int i = 0; i < P->nnca && P->base < 0; i++)
             if (P->ncas[i].type == 0 && !P->ncas[i].patch && P->ncas[i].id == *t) P->base = i, P->title = *t;
-    if (P->base < 0) {
+    if (P->base < 0 && dlc_only) P->title = titles[0];  // (the add-on alone: its game is set up already)
+    else if (P->base < 0) {
         bool upd_only = false;
         for (const uint64_t *t = titles; *t; t++)
             for (int i = 0; i < P->nnca; i++) upd_only |= P->ncas[i].type == 0 && P->ncas[i].id == *t;
@@ -1001,13 +1020,17 @@ NxPkg *nxpkg_open_list(const char *const *paths, int npaths, const char *keys, c
         }
         if ((n->type == 4 || n->type == 5) && (n->id & ~0xFFFull) == (P->title & ~0xFFFull) + 0x1000 && P->dlc < 0) P->dlc = i;
     }
-    for (int i = -1; i < P->nupd; i++)
+    for (int i = P->base < 0 ? 0 : -1; i < P->nupd; i++)
         if (!nca_key(P, &P->ncas[i < 0 ? P->base : P->upd[i]], why, wn)) {
             *err = NXPKG_KEY_MISSING;
             nxpkg_close(P);
             return NULL;
         }
-    if (P->dlc >= 0 && !nca_key(P, &P->ncas[P->dlc], why, wn)) LOG("[nxpkg] add-on content skipped: %s\n", why), P->dlc = -1, why[0] = 0;
+    if (P->dlc >= 0 && !nca_key(P, &P->ncas[P->dlc], why, wn)) {
+        LOG("[nxpkg] add-on content skipped: %s\n", why), P->dlc = -1;
+        if (dlc_only) { *err = NXPKG_KEY_MISSING; nxpkg_close(P); return NULL; }  // (why: the keys' message)
+        why[0] = 0;
+    }
     *err = NXPKG_OK;
     return P;
 }

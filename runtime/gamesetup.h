@@ -36,6 +36,8 @@ enum {
 
 // The game files in <data root>/extracted: ready to play (exefs, romfs.bin and game code built for this version).
 bool setup_ready(void);
+// The game files are set up but the game code isn't there or is another version's (an updated app): setup_start(NULL).
+bool setup_code_stale(void);
 // The game in that exefs/ folder: "Eevee", "Pikachu" or NULL.
 const char *game_name(const char *exefs);
 // The build of that exefs/main: one with address tables (runtime/fnhook.c, tools/patches.py) - the 60 fps and wild
@@ -52,6 +54,12 @@ void setup_start(const char *folder);
 // Starts a setup from packages picked one by one: the base game, its update and (optional, NULL / "") the add-on
 // content (.nsp / .xci files), read with the keys file picked (NULL / "": prod.keys searched for as usual).
 void setup_start_files(const char *base, const char *update, const char *dlc, const char *keys);
+// The Mega Dimension add-on alone (its .nsp / .xci, read with the keys file; NULL / "": searched) added to the game files
+// set up already, however they were set up (extracted/dlc.bin; no recompile). State 0 idle, 1 running, 2 done, 3 failed.
+void setup_add_dlc(const char *pkg, const char *keys);
+int setup_dlc_state(void);
+const char *setup_dlc_msg(void);  // what happened (failed: why)
+bool setup_dlc_present(void);     // the add-on is set up (extracted/dlc.bin or dlc/)
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);

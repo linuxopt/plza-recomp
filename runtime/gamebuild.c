@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "cheats.h"
 #include "gamelib.h"
 #include "paths.h"
 #include "platform.h"
@@ -300,6 +301,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     rt_remove_game_file(game_dir, ".gamebuild");
     rt_remove_game_file(game_dir, GAMELIB_NAME);
     rt_remove_game_file(game_dir, GAMELIB_NAME ".id");
+    rt_remove_game_file(game_dir, GAMELIB_NAME ".cheats");
     mkdir(work, 0755);
     if (t.zig) {  // its caches in the work folder too (deleted below), not ~/.cache: hundreds of MB, used once
         char zc[1200];
@@ -314,6 +316,12 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     }
     LOG("[gamebuild] generator %s%s%s, compiler %s%s, %d jobs, profile %s\n", t.gen, t.gen_script[0] ? " " : "", t.gen_script,
         t.cc, t.zig ? " cc" : "", o->jobs, t.pgo[0] ? t.pgo : "none");
+
+    // 0. the places the cheat file (runtime/cheats.c) writes the game's code: compiled to follow memory there
+    char cheat_sites[1100] = "", cheat_hash[32] = "";
+    snprintf(cheat_sites, sizeof cheat_sites, "%s" SEP "cheat_sites.json", work);
+    if (!cheats_write_sites(cheat_sites, cheat_hash, sizeof cheat_hash) || !strcmp(cheat_hash, "0000000000000000"))
+        cheat_sites[0] = 0;
 
     // 1. the generator, every module at once; their finished files are compiled while it goes on (bases: rt.h)
     enum { NGEN = 4 };
@@ -339,6 +347,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         add(&a, base[i]);
         add(&a, g->out);
         if (i == 1) { add(&a, "--hle"); add(&a, t.hle); }
+        if (i == 0 && cheat_sites[0]) { add(&a, "--cheat-sites"); add(&a, cheat_sites); }
         g->p = spawn(a.v, g->log);
         args_free(&a);
         if (!g->p) { snprintf(why, why_size, "the game code builder didn't start"); ok = false; }
@@ -509,6 +518,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
             ok = false;
         }
         if (f) fclose(f);
+        if (ok && cheat_sites[0]) cheats_mark_built(game_dir, cheat_hash);
     }
     free(units.u);
     rt_remove_game_file(game_dir, ".gamebuild");  // the C, the objects, the logs

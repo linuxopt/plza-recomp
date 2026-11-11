@@ -34,6 +34,9 @@ NxPkg *nxpkg_open(const char *path, const uint64_t *titles, int *err, char *why,
 NxPkg *nxpkg_open_list(const char *const *paths, int npaths, const char *keys, const uint64_t *titles, int *err, char *why,
                        size_t why_size);
 void nxpkg_close(NxPkg *p);
+// The add-on content alone (the Mega Dimension .nsp / .xci) of the game `title`, whose game files are set up already:
+// its RomFS image written to out. keys: the keys file (NULL / "": searched as usual). False: why says.
+bool nxpkg_write_dlc_only(const char *pkg, const char *keys, uint64_t title, const char *out, char *why, size_t why_size);
 // Where prod.keys would be found for packages in / beside `near` (a file or folder; NULL: the usual places only): its
 // path in out. False: none with a usable header key.
 bool nxpkg_find_keys(const char *near, char *out, size_t n);

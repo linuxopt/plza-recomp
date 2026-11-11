@@ -143,7 +143,7 @@ bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
 // ---- game files
 // What the setup (runtime/ui/launcher.mm) creates in extracted/, plus what older versions' extraction and manual
 // extractions left there (never read at run time).
-static const char *const GAME_FILES[] = {"exefs", "romfs", "romfs.bin", "dlc", "dlc.bin", GAMELIB_NAME, GAMELIB_NAME ".id", ".gamebuild",
+static const char *const GAME_FILES[] = {"exefs", "romfs", "romfs.bin", "dlc", "dlc.bin", "dlc.bin.tmp", GAMELIB_NAME, GAMELIB_NAME ".id", GAMELIB_NAME ".cheats", ".gamebuild",
                                          ".extract", "extract.log", "xci_secure", "nso_raw", "update_pfs", ".DS_Store"};
 
 // game_dir must be <data root>/extracted, a real folder (a dev worktree's symlinked extracted/ is refused)

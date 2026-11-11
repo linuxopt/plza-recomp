@@ -418,8 +418,59 @@ static void battle_seen(void) {  // (timeline_step: a battle's timeline stepped)
     atomic_store(&g_battle_until, plat_now_ns() + hold);
     fps_cap_update();
 }
+void za_fovprobe_present(uint64_t frame);
 void za_fixes_present(void) {  // (each present: za_options_present)
     if (g_cap_from) fps_cap_update();
+    { extern uint64_t renderer_present_count(void); za_fovprobe_present(renderer_present_count()); }
+}
+
+// Research (LARECOMP_ZA_FOVPROBE=1): the camera blocks the handle resolver 0x70002385b0 hands out - those with a
+// field of view at +0x1c (0.2..2 rad) and the screen's aspect at +0x20 - logged once each with the caller; the first
+// gets a hardware watchpoint on +0x1c (its writers: [hwwatch]). LARECOMP_ZA_FOVPROBE=<scale>: that block's +0x1c
+// multiplied by <scale> from present 2400 on (screenshots LARECOMP_SHOT_AT show what it changes).
+#define ZA_HANDLE_RESOLVE 0x70002385b0ull
+static _Atomic uint64_t g_fov_block;
+static int fov_probe(Cpu *c, uint64_t addr) {
+    uint64_t lr = c->x[30];
+    rt_call_original(c, addr);
+    uint64_t p = c->x[0];
+    float fov, asp;
+    if (p < 0x7000000000ull || p >= 0x8000000000ull) return 1;
+    memcpy(&fov, (const void *)(uintptr_t)(p + 0x1c), 4), memcpy(&asp, (const void *)(uintptr_t)(p + 0x20), 4);
+    if (!(fov > 0.2f && fov < 2.0f && asp > 1.2f && asp < 2.6f)) return 1;
+    static uint64_t seen[32];
+    static int nseen;
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    bool fresh = true;
+    for (int i = 0; i < nseen; i++) fresh &= seen[i] != p;
+    if (fresh && nseen < 32) {
+        seen[nseen++] = p;
+        float near_, far_;
+        memcpy(&near_, (const void *)(uintptr_t)(p + 0x14), 4), memcpy(&far_, (const void *)(uintptr_t)(p + 0x18), 4);
+        LOG("[za] fovprobe block %llx: +14 %g +18 %g fov %g aspect %g (caller %llx)\n", (unsigned long long)p, near_, far_, fov, asp,
+            (unsigned long long)lr);
+        if (nseen == 1) {
+            extern void hwwatch_arm(uint64_t addr, uint64_t len);
+            g_fov_block = p;
+            hwwatch_arm(p + 0x1c, 4);
+        }
+    }
+    pthread_mutex_unlock(&mu);
+    return 1;
+}
+void za_fovprobe_present(uint64_t frame) {
+    static float scale = -1, orig;
+    if (scale < 0) scale = getenv("LARECOMP_ZA_FOVPROBE") ? (float)atof(getenv("LARECOMP_ZA_FOVPROBE")) : 0;
+    uint64_t p = g_fov_block;
+    if (!p || scale <= 1.01f) return;
+    float *f = (float *)(uintptr_t)(p + 0x1c);
+    if (frame == 2400) orig = *f, LOG("[za] fovprobe: fov %g -> %g\n", orig, orig * scale);
+    if (frame >= 2400 && orig > 0 && *f != orig * scale) {
+        static int n;
+        if (n++ < 5) LOG("[za] fovprobe: present %llu fov was %g (the game wrote it back)\n", (unsigned long long)frame, *f);
+        *f = orig * scale;
+    }
 }
 
 // Draw distance for people. The game draws at most 20 characters (people and their Pokemon) in full at once: the
@@ -713,6 +764,7 @@ void za_fixes_configure(const char *exefs) {
     {
         const char *m = getenv("LARECOMP_ZA_SCENE60");
         if (!(m && atoi(m) == 0)) rt_register_fnhook_at(ZA_SCRIPT_OBJ, scene60_hook), rt_register_fnhook_at(ZA_MOVE_TO, scene60_hook);
+        if (getenv("LARECOMP_ZA_FOVPROBE")) rt_register_fnhook_at(ZA_HANDLE_RESOLVE, fov_probe);
         const char *b = getenv("LARECOMP_ZA_BATTLE144");
         g_battle_cap = !(b && atoi(b) == 0);
     }

@@ -385,6 +385,8 @@ static TexBackend *tex_backend(NvnTexture *t) {
         if (b->scalable && (b->sx != g_rs_x || b->sy != g_rs_y)) {  // output resolution changed: reallocate
             destroy_image(b);
             create_image(t, b);
+            if (t->width >= 900 && getenv("LARECOMP_LOG_RT"))
+                LOG("[rt-tex] rescaled %ux%u fmt %#x -> %ux%u\n", t->width, t->height, t->format, b->width, b->height);
         }
         return b;
     }
@@ -394,6 +396,9 @@ static TexBackend *tex_backend(NvnTexture *t) {
     b = calloc(1, sizeof *b);
     b->scalable = tex_scalable(t);
     create_image(t, b);
+    if (t->width >= 900 && getenv("LARECOMP_LOG_RT"))  // (research: which big textures follow the render scale)
+        LOG("[rt-tex] %ux%u fmt %#x target %u flags %#x -> %ux%u%s\n", t->width, t->height, t->format, t->target, t->flags,
+            b->width, b->height, b->scalable ? " scaled" : "");
     t->backend = b;
     live_add(t, b);
     prof_tb_new++, prof_tb_dead_ns += t1 - t0, prof_tb_create_ns += SDL_GetTicksNS() - t1;  // (exec.c [spike])

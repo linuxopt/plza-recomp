@@ -1,5 +1,5 @@
 // In-game overlay (Dear ImGui on the Vulkan renderer; input fed from SDL events): the "close the game?" question
-// (Esc, F1 or Minus + Plus on a controller), the name entry the game asks for (runtime/hle/swkbd.c), the FPS counter
+// (Esc, F1 or Minus + Plus on a controller), the Cheats panel (F2 or Minus + R: runtime/cheats.c), the name entry the game asks for (runtime/hle/swkbd.c), the FPS counter
 // and the controller's finger on the touch screen (runtime/hle/input.c). Everything else is set on the start screen
 // (runtime/ui/launcher_lg.mm).
 //
@@ -23,6 +23,7 @@ extern "C" {
 #include "../settings.h"
 #include "menu.h"
 #include "../paths.h"
+#include "../cheats.h"
 void input_reset(void);
 bool input_finger_cursor(float *x, float *y, bool *down);  // runtime/hle/input.c
 void input_rec_text(const char *text);                   // (LARECOMP_REC / LARECOMP_REPLAY: the names typed)
@@ -131,7 +132,8 @@ static std::atomic<bool> g_last_pad{false};
 static char g_kbd_text[96];
 static int g_kbd_max = 8;
 static char g_kbd_title[256];  // (the game's heading for it: swkbd.c)
-static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
+static std::atomic<bool> g_cheats_open{false};  // the Cheats panel (F2 / Minus + R): toggles while playing
+static bool capturing() { return g_open.load() || g_kbd.load() == 1 || g_cheats_open.load(); }
 // The game gets no input while this is true (runtime/hle/input.c): the question or the name entry is up.
 extern "C" bool menu_input_captured(void) { return capturing(); }
 
@@ -150,6 +152,16 @@ bool menu_handle_event(const SDL_Event *e) {
     }
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN:
+        if (!e->key.repeat && e->key.scancode == SDL_SCANCODE_F2 && !typing && !g_open.load()) {
+            g_cheats_open = !g_cheats_open.load();
+            input_reset();
+            return true;
+        }
+        if (!e->key.repeat && e->key.scancode == SDL_SCANCODE_ESCAPE && g_cheats_open.load()) {
+            g_cheats_open = false;
+            input_reset();
+            return true;
+        }
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
                                (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
             if (!typing) set_open(!g_open.load());  // (Esc with the question up goes to it below: "Não")
@@ -184,6 +196,13 @@ bool menu_handle_event(const SDL_Event *e) {
         bool down = e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_BACK) back_down = down;
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_START) start_down = down;
+        static bool r_down;
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) r_down = down;
+        if (down && !typing && !g_open.load() && back_down && r_down) {  // Minus + R: the Cheats panel
+            g_cheats_open = !g_cheats_open.load();
+            input_reset();
+            return true;
+        }
         if (down && !typing && ((back_down && start_down) || e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE)) {
             set_open(!g_open.load());
             return true;
@@ -427,6 +446,47 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::End();
 }
 
+// The Cheats panel: the cheat file's entries with a tick box each, on / off at once (runtime/cheats.c). Code cheats
+// the game code wasn't compiled for say so (Game Files -> Recompile game code on the launcher).
+static void cheats_draw(ImGuiIO &io, float scale) {
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 90));
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(900 * scale, io.DisplaySize.y * 0.8f), ImGuiCond_Always);
+    ImGui::Begin("Cheats##cheats", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse);
+    ImGui::PushFont(g_font);
+    int n = cheats_count();
+    static bool rebuild = false, checked = false;
+    if (!checked) rebuild = cheats_need_rebuild(), checked = true;
+    if (!n) ImGui::TextWrapped("No cheats for this game's build (%s). Add them on the launcher's Cheats page.", cheats_build_id());
+    else {
+        ImGui::TextDisabled("%s  -  F2 / Minus + R closes", cheats_file());
+        if (rebuild)
+            ImGui::TextColored(ImVec4(1, 0.8f, 0.35f, 1), "%s", "Code cheats need the game code recompiled with this cheat file (launcher: Game Files).");
+        if (ImGui::Button("All off")) cheats_all_off();
+        ImGui::Separator();
+        ImGui::BeginChild("##list");
+        for (int i = 0; i < n; i++) {
+            if (cheats_is_master(i) || cheats_is_hidden(i)) continue;
+            if (cheats_is_header(i)) { if (i > 0) ImGui::SeparatorText(cheats_name(i)); continue; }
+            bool on = cheats_enabled(i);
+            ImGui::PushID(i);
+            ImGui::BeginDisabled(rebuild && cheats_is_code(i));
+            if (ImGui::Checkbox(cheats_name(i), &on)) cheats_set(i, on);
+            ImGui::EndDisabled();
+            if (cheats_note(i)[0]) { ImGui::SameLine(); ImGui::TextDisabled("%s", cheats_note(i)); }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        g_cheats_open = false;
+        checked = false;
+        input_reset();
+    }
+    ImGui::PopFont();
+    ImGui::End();
+}
+
 // A short notice in the corner for a few seconds (the screenshot key: runtime/nvn/vulkan/device.c). Any thread.
 static char g_notice[128];
 static std::atomic<uint64_t> g_notice_until{0};
@@ -436,11 +496,11 @@ extern "C" void menu_notice(const char *text) {
 }
 
 void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
-    bool open = g_open.load(), kbd = g_kbd.load() == 1;
+    bool open = g_open.load(), kbd = g_kbd.load() == 1, cheats = g_cheats_open.load();
     float fx, fy;
     bool fdown, finger = !open && input_finger_cursor(&fx, &fy, &fdown);
     bool notice = SDL_GetTicks() < g_notice_until.load();
-    if (!open && !kbd && !g_settings.show_fps && !finger && !notice) {
+    if (!open && !kbd && !cheats && !g_settings.show_fps && !finger && !notice) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
     }
@@ -504,6 +564,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         dl->AddCircleFilled(ImVec2(fx, fy), r, fdown ? IM_COL32(255, 255, 255, 170) : IM_COL32(255, 255, 255, 60));
         dl->AddCircle(ImVec2(fx, fy), r, IM_COL32(255, 255, 255, 235), 0, 4 * scale);
     }
+    if (cheats && !open) cheats_draw(io, scale);
     if (open) quit_draw(io, scale);
     if (kbd) keyboard_draw(io, scale);
     ImGui::Render();

@@ -5,6 +5,7 @@ Usage: gen.py <name> <nso> <base> <outdir> [--hle hle_symbols.txt] [--chunk N] [
 --simd: FP/SIMD/CRC32 as AArch64 inline asm (default on arm64 hosts) or portable C (default elsewhere).
 """
 import argparse
+import json
 import bisect
 import os
 import platform
@@ -243,6 +244,21 @@ class Module:
         self.stats['setjmp_sites'] = 0
 
     SETJMP_NAMES = {'setjmp', '_setjmp', '__setjmp', 'sigsetjmp', '__sigsetjmp'}
+
+    def orig_word(self, a):
+        return self.words[(a - self.lo) // 4]
+
+    def extend_for_cheats(self, sites):
+        """Cheat code caves in the padding after the text: the text taken up to the last of them (its words: the
+        image's, zeros). Returns the old end (a function boundary from now on) or None."""
+        top = max(sites) + 4 if sites else 0
+        if top <= self.hi:
+            return None
+        n, old = self.nso, self.hi
+        new_hi = min((top + 0xF) & ~0xF, self.base + len(n.image))
+        self.hi = new_hi
+        self.words = struct.unpack(f'<{(new_hi - self.lo) // 4}I', bytes(n.image[n.text[0]:n.text[0] + (new_hi - self.lo)]))
+        return old
 
     def _setjmp_targets(self):
         """Addresses whose call is a setjmp: the module's own setjmp functions and its PLT stubs for imported ones
@@ -733,6 +749,13 @@ class Module:
                     v = self.lifter.lift(w, a)
                     if v.kind in ('b', 'bcond') and isinstance(v.target, int) and entry <= v.target < end:
                         labels.add(v.target)
+        cheat_here = [a for a in range(entry, end, 4) if a in CHEAT_CODE]
+        if cheat_here:
+            labels = set(labels)
+            for a in cheat_here:
+                for t in cheat_targets(self, a):
+                    if entry <= t < end:
+                        labels.add(t)
         last = None
         for a in range(entry, end, 4):
             ins = self.lift(a)
@@ -748,6 +771,22 @@ class Module:
                     out.append(f'    {"if" if first else "else if"} (rw == {hx(w)}) {{ ' + ' '.join(self.render_single(v, a, jump, refs)) + ' }')
                     first = False
                 out.append('    else { ' + ' '.join(self.render_single(ins, a, jump, refs)) + ' } }')
+                last = 'op'
+                continue
+            if a in CHEAT_CODE:  # cheat site (runtime/cheats.c): the instruction memory holds now - the game's or a cheat's
+                flush()
+                out.append(f'    {{ uint32_t cw = *(volatile const uint32_t *)(uintptr_t){hx(a)};')
+                first = True
+                for w in CHEAT_CODE[a]:
+                    if w == self.orig_word(a):
+                        continue
+                    try:
+                        v = self.lifter.lift(w, a)
+                    except Unsupported as e:
+                        v = Insn('trap', f'rt_udf(c, {hx(a)}); /* {e} */')
+                    out.append(f'    {"if" if first else "else if"} (cw == {hx(w)}) {{ ' + ' '.join(self.render_single(v, a, jump, refs)) + ' }')
+                    first = False
+                out.append(('    else { ' if not first else '    { ') + ' '.join(self.render_single(ins, a, jump, refs)) + ' } }')
                 last = 'op'
                 continue
             if a in PATCHES:  # hand-written replacement for one instruction (tools/patches.py)
@@ -836,6 +875,23 @@ if _os.path.exists(_rv):
         RANDO_CODE[int(_a, 16)] = [int(_w, 16) for _w in _ws]
 
 
+# Cheat code sites (runtime/cheats.c cheats_write_sites, --cheat-sites): main offset -> the words cheat files write there
+CHEAT_CODE = {}
+
+
+def cheat_targets(m, a):
+    """Branch / call targets of the instructions the cheats can put at a."""
+    out = []
+    for w in CHEAT_CODE.get(a, ()):
+        try:
+            v = m.lifter.lift(w, a)
+        except Exception:
+            continue
+        if v.kind in ('b', 'bcond', 'bl') and isinstance(v.target, int):
+            out.append(v.target)
+    return out
+
+
 def write_if_changed(path, text):
     """Leaves unchanged chunks untouched so make only recompiles what a patch affected."""
     try:
@@ -861,6 +917,7 @@ def main():
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--no-promote', action='store_true')  # guest registers stay in the Cpu struct (promote_registers)
     ap.add_argument('--trace-stores', action='store_true')  # research build (letsgo-recomp's docs/DEPURACAO.md, LARECOMP_TRACE_STORES)
+    ap.add_argument('--cheat-sites')  # JSON {"<main offset>": ["<word>", ...]} (runtime/cheats.c): compiled to follow memory
     ap.add_argument('--simd', choices=('asm', 'c'),
                     default='asm' if platform.machine().lower() in ('arm64', 'aarch64') else 'c')
     args = ap.parse_args()
@@ -879,6 +936,14 @@ def main():
         PATCHES.clear()
         PATCHES.update(moved)
         RANDO_CODE.clear()
+    cheat_old_hi = None
+    if args.cheat_sites and os.path.exists(args.cheat_sites):
+        with open(args.cheat_sites) as f:
+            for k, ws in json.load(f).items():
+                CHEAT_CODE[args.base + int(k, 16)] = [int(w, 16) for w in ws]
+        cheat_old_hi = m.extend_for_cheats(sorted(CHEAT_CODE))
+        print(f'{args.name}: {len(CHEAT_CODE)} cheat code sites' + (f', text extended to {m.hi:#x} for code caves' if cheat_old_hi else ''),
+              file=sys.stderr)
     starts = m.boundaries()
     hle = {}
     if args.hle and os.path.exists(args.hle):
@@ -895,6 +960,13 @@ def main():
             t = m.lo + i * 4 + sext26(w) * 4
             if m.in_text(t):
                 start_set.add(t)
+    if CHEAT_CODE:  # cheats' branches: their targets (code caves, the instruction after a patched branch) are entries
+        if cheat_old_hi:
+            start_set.add(cheat_old_hi)
+        for a in CHEAT_CODE:
+            for t in cheat_targets(m, a):
+                if m.in_text(t):
+                    start_set.add(t)
     # Code addresses materialized in registers (callbacks, vtables built at runtime): ADR, or
     # ADRP followed shortly by ADD on the same register.
     adrp_regs = {}

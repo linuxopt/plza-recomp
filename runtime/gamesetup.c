@@ -130,6 +130,11 @@ bool setup_ready(void) {
     return game_ok(ROOT "/exefs") && !game_za_unsupported(ROOT "/exefs") && is_file(ROOT "/romfs.bin") && gamelib_present(ROOT);
 }
 
+// Game files set up, but the game code missing or built by another version of the app: a rebuild is all it needs
+bool setup_code_stale(void) {
+    return game_ok(ROOT "/exefs") && !game_za_unsupported(ROOT "/exefs") && is_file(ROOT "/romfs.bin") && !gamelib_present(ROOT);
+}
+
 typedef struct { char exefs[1024], romfs[1024], romfs_bin[1024]; bool package; } Found;
 
 static void find_game(const char *dir, int depth, Found *f) {
@@ -393,5 +398,41 @@ void setup_start_files(const char *base, const char *update, const char *dlc, co
     g_state = SETUP_LOOKING;
     pthread_t t;
     pthread_create(&t, NULL, setup_thread, NULL);
+    pthread_detach(t);
+}
+
+// ---- the Mega Dimension add-on alone, added to the game files set up already (any way: packages or extracted)
+static _Atomic int g_dlc_state;
+static char g_dlc_msg[300], g_dlc_pkg[1024], g_dlc_keys[1024];
+int setup_dlc_state(void) { return g_dlc_state; }
+const char *setup_dlc_msg(void) { return g_dlc_msg; }
+bool setup_dlc_present(void) { return is_file(ROOT "/dlc.bin") || is_dir(ROOT "/dlc"); }
+
+static void *dlc_thread(void *arg) {
+    (void)arg;
+    uint64_t title = program_id(ROOT "/exefs");
+    char why[300] = "";
+    bool ok = title && nxpkg_write_dlc_only(g_dlc_pkg, g_dlc_keys, title, ROOT "/dlc.bin.tmp", why, sizeof why);
+    if (ok) {
+        remove(ROOT "/dlc.bin");
+        ok = rename(ROOT "/dlc.bin.tmp", ROOT "/dlc.bin") == 0;
+        if (!ok) snprintf(why, sizeof why, "dlc.bin couldn't be written");
+    }
+    remove(ROOT "/dlc.bin.tmp");
+    if (!title) snprintf(why, sizeof why, "set up the game files first");
+    LOG("[setup] add-on content from %s: %s\n", g_dlc_pkg, ok ? "written (extracted/dlc.bin)" : why);
+    snprintf(g_dlc_msg, sizeof g_dlc_msg, "%s", ok ? "Mega Dimension added. It is active from the next start of the game." : why);
+    g_dlc_state = ok ? 2 : 3;
+    return NULL;
+}
+
+void setup_add_dlc(const char *pkg, const char *keys) {
+    if (g_dlc_state == 1 || g_running) return;
+    snprintf(g_dlc_pkg, sizeof g_dlc_pkg, "%s", pkg ? pkg : "");
+    snprintf(g_dlc_keys, sizeof g_dlc_keys, "%s", keys ? keys : "");
+    g_dlc_msg[0] = 0;
+    g_dlc_state = 1;
+    pthread_t t;
+    pthread_create(&t, NULL, dlc_thread, NULL);
     pthread_detach(t);
 }

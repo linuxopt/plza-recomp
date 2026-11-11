@@ -9,7 +9,7 @@
 // chooses). The choices go to larecomp.ini (settings.c; bind_key_* from runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
 // LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
-// from that folder at once; LARECOMP_SETUP_FILES=<base>|<update>|<dlc>|<keys> from those packages; LARECOMP_MOD_INSTALL=<file or folder> installs a translation at once;
+// from that folder at once; LARECOMP_CHEATS_DOWNLOAD=1 downloads the cheat database; LARECOMP_SETUP_FILES=<base>|<update>|<dlc>|<keys> from those packages; LARECOMP_MOD_INSTALL=<file or folder> installs a translation at once;
 // LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section, =<slot> also waits for a new key for that input
 // (runtime/input_bind.h BIND_*), and <slot>:<key name> presses that key for it; LARECOMP_LAUNCHER_PAGE=options|
 // controls|files|mods opens that launcher page; LARECOMP_LAUNCHER_SIZE=<w>x<h> makes the launcher's window that size.
@@ -36,6 +36,7 @@ extern "C" void vk_describe_gpu(char *name, size_t n, int *vram_gb, bool *integr
 extern "C" {
 #include "gamesetup.h"
 #include "nxpkg.h"
+#include "cheats.h"
 #include "input_bind.h"
 #include "mods.h"
 #include "platform.h"
@@ -359,7 +360,7 @@ static void SDLCALL picked_game(void *, const char *const *files, int) {
     pthread_mutex_unlock(&g_pick_lock);
 }
 // The Game Files page's four pickers (base game, update, add-on content, prod.keys): slot = userdata
-enum { PICK_BASE, PICK_UPDATE, PICK_DLC, PICK_KEYS, PICK_N };
+enum { PICK_BASE, PICK_UPDATE, PICK_DLC, PICK_KEYS, PICK_CHEATS, PICK_N };
 static char g_pick_file[PICK_N][1024];
 static void SDLCALL picked_file(void *slot, const char *const *files, int) {
     if (!files || !files[0]) return;
@@ -450,22 +451,22 @@ static bool g_files_loaded;
 static void files_save(void) {
     FILE *f = fopen("gamefiles.ini", "w");
     if (!f) return;
-    static const char *const key[PICK_N] = {"base", "update", "dlc", "keys"};
-    for (int i = 0; i < PICK_N; i++) fprintf(f, "%s = %s\n", key[i], g_files[i]);
+    static const char *const key[PICK_CHEATS] = {"base", "update", "dlc", "keys"};
+    for (int i = 0; i < PICK_CHEATS; i++) fprintf(f, "%s = %s\n", key[i], g_files[i]);
     fclose(f);
 }
 static void files_load(void) {
     g_files_loaded = true;
     FILE *f = fopen("gamefiles.ini", "r");
     if (!f) return;
-    static const char *const key[PICK_N] = {"base", "update", "dlc", "keys"};
+    static const char *const key[PICK_CHEATS] = {"base", "update", "dlc", "keys"};
     char line[1200];
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
         char *eq = strstr(line, " = ");
         if (!eq) continue;
         *eq = 0;
-        for (int i = 0; i < PICK_N; i++)
+        for (int i = 0; i < PICK_CHEATS; i++)
             if (!strcmp(line, key[i])) snprintf(g_files[i], sizeof g_files[i], "%s", eq + 3);
     }
     fclose(f);
@@ -483,7 +484,7 @@ static void game_files_pickers(SDL_Window *win, bool ready) {
     if (!g_files_loaded) files_load();
     char got[1024];
     bool changed = false;
-    for (int i = 0; i < PICK_N; i++)
+    for (int i = 0; i < PICK_CHEATS; i++)
         if (take(g_pick_file[i], got, sizeof got)) snprintf(g_files[i], sizeof g_files[i], "%s", got), changed = true;
     if (changed) files_save();
     // prod.keys: the one picked, else where it would be found (beside the base game, ~/.switch, the emulators')
@@ -496,10 +497,10 @@ static void game_files_pickers(SDL_Window *win, bool ready) {
     static const SDL_DialogFileFilter pkg_filter[] = {{"Switch packages (.nsp, .xci)", "nsp;xci;NSP;XCI"}, {"All files", "*"}};
     static const SDL_DialogFileFilter keys_filter[] = {{"Keys (prod.keys, keys.txt)", "keys;txt"}, {"All files", "*"}};
     struct Row { int slot; const char *en, *pt, *hint_en, *hint_pt; bool optional; };
-    static const Row rows[PICK_N] = {
+    static const Row rows[PICK_CHEATS] = {
         {PICK_BASE, "Base game", "Jogo base", "Pokémon Legends: Z-A (1.0.0), .nsp or .xci", "Pokémon Legends: Z-A (1.0.0), .nsp ou .xci", false},
         {PICK_UPDATE, "Game update", "Atualização", "Update 2.0.2 (v393216), .nsp", "Atualização 2.0.2 (v393216), .nsp", false},
-        {PICK_DLC, "Mega Dimension DLC", "DLC Mega Dimension", "Optional, .nsp", "Opcional, .nsp", true},
+        {PICK_DLC, "Mega Dimension DLC", "DLC Mega Dimension", "Optional, .nsp or .xci", "Opcional, .nsp ou .xci", true},
         {PICK_KEYS, "prod.keys", "prod.keys", "Dumped from your Switch with Lockpick_RCM", "Dump do seu Switch com o Lockpick_RCM", false},
     };
     ImGui::Spacing();
@@ -542,6 +543,28 @@ static void game_files_pickers(SDL_Window *win, bool ready) {
     bool have_keys = file_there(g_files[PICK_KEYS]) || (!g_files[PICK_KEYS][0] && auto_keys[0]);
     bool dlc_ok = !g_files[PICK_DLC][0] || file_there(g_files[PICK_DLC]);
     bool can = have_base && have_upd && have_keys && dlc_ok && !busy;
+    // The Mega Dimension DLC on its own: added to the game set up already (extracted files too), no recompile
+    {
+        int ds = setup_dlc_state();
+        bool have_dlc = file_there(g_files[PICK_DLC]);
+        if (ready) {
+            ImGui::Spacing();
+            ImGui::AlignTextToFramePadding();
+            if (setup_dlc_present()) ImGui::TextColored(k_green, "%s", T("Mega Dimension DLC: set up", "DLC Mega Dimension: preparado"));
+            else ImGui::TextDisabled("%s", T("Mega Dimension DLC: not set up (optional)", "DLC Mega Dimension: não preparado (opcional)"));
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!have_dlc || !have_keys || busy || ds == 1);
+            if (ImGui::Button(ds == 1 ? T("Adding the DLC...", "Adicionando o DLC...")
+                                      : setup_dlc_present() ? T("Replace with the DLC picked above", "Trocar pelo DLC escolhido acima")
+                                                            : T("Add the DLC picked above", "Adicionar o DLC escolhido acima")))
+                setup_add_dlc(g_files[PICK_DLC], g_files[PICK_KEYS][0] ? g_files[PICK_KEYS] : auto_keys);
+            ImGui::EndDisabled();
+            if (!have_dlc && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", T("Pick the DLC's .nsp / .xci in the Mega Dimension DLC row first.",
+                                          "Escolha antes o .nsp / .xci do DLC na linha DLC Mega Dimension."));
+            if (ds >= 2) ImGui::TextColored(ds == 2 ? k_green : k_red, "%s", setup_dlc_msg());
+        }
+    }
     ImGui::Spacing();
     ImGui::BeginDisabled(!can);
     if (ImGui::Button(ready ? T("Set up and recompile from these files", "Preparar e recompilar com estes arquivos")
@@ -639,11 +662,84 @@ static void game_files_section(SDL_Window *win) {
     game_files_pickers(win, ready);
 }
 
+// ------------------------------------------------------------------ the cheats page
+// The cheat file for this game's build (cheats/<build id>.txt, Atmosphère format: runtime/cheats.c): download the
+// GBAtemp database's, import a .txt / .zip, tick what you want (also in game: F2 or Minus + R). Code cheats need the
+// game code compiled with the file (Recompile game code here).
+static void cheats_page(SDL_Window *win) {
+    static bool loaded;
+    static int dl_was;
+    int dl = cheats_download_state();
+    if (!loaded || (dl != dl_was && dl == CHEATS_DL_DONE)) cheats_load(), loaded = true;
+    dl_was = dl;
+    static char msg[300];
+    char got[1024];
+    if (take(g_pick_file[PICK_CHEATS], got, sizeof got)) cheats_import(got, msg, sizeof msg);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 1150);
+    ImGui::TextUnformatted(T("Atmosphère cheat codes (as EdiZon / Breeze use them) for your game's build, run on the game's memory "
+                             "as on a Switch. Tick them here or while playing: F2 (or Minus + R on a controller).",
+                             "Códigos de trapaça do Atmosphère (como o EdiZon / Breeze usam) para a versão do seu jogo, rodando na "
+                             "memória do jogo como num Switch. Marque aqui ou durante o jogo: F2 (ou Menos + R no controle)."));
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    ImGui::BeginDisabled(dl == CHEATS_DL_RUNNING || setup_running());
+    if (ImGui::Button(dl == CHEATS_DL_RUNNING ? T("Downloading...", "Baixando...") : T("Download the GBAtemp cheat database", "Baixar o banco de cheats da GBAtemp")))
+        cheats_download_start();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", CHEATS_DB_THREAD);
+    ImGui::SameLine();
+    static const SDL_DialogFileFilter cf[] = {{"Cheats (.txt, .zip)", "txt;zip"}, {"All files", "*"}};
+    if (ImGui::Button(T("Import a cheat file...", "Importar arquivo de cheats...")))
+        SDL_ShowOpenFileDialog(picked_file, (void *)(intptr_t)PICK_CHEATS, win, cf, 2, NULL, false);
+    ImGui::SameLine();
+    if (ImGui::Button(T("Open the cheats folder", "Abrir a pasta de cheats"))) open_folder(CHEATS_DIR);
+    ImGui::SameLine();
+    if (ImGui::Button(T("All off", "Desligar todos"))) cheats_all_off();
+    if (dl == CHEATS_DL_DONE || dl == CHEATS_DL_FAILED) ImGui::TextColored(dl == CHEATS_DL_DONE ? k_green : k_red, "%s", cheats_download_msg());
+    else if (msg[0]) ImGui::TextColored(k_yellow, "%s", msg);
+    int n = cheats_count();
+    if (!setup_ready()) { ImGui::TextColored(k_yellow, "%s", T("Set up the game files first.", "Prepare os arquivos do jogo antes.")); return; }
+    if (!n) {
+        ImGui::TextDisabled(g_pt ? "Nenhum cheat para a versão %s ainda: baixe ou importe acima." : "No cheats for build %s yet: download or import them above.",
+                            cheats_build_id());
+        return;
+    }
+    static bool need = false;
+    static int checked_n = -1;
+    if (checked_n != n || dl_was == CHEATS_DL_DONE) need = cheats_need_rebuild(), checked_n = n;
+    ImGui::TextDisabled("%s: %d", cheats_file(), n);
+    if (need) {
+        ImGui::TextColored(k_yellow, "%s", T("Code cheats (most of them) take effect once the game code is compiled with this cheat file (a few minutes).",
+                                             "Cheats de código (a maioria) funcionam depois de compilar o código do jogo com este arquivo (alguns minutos)."));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(setup_running());
+        if (ImGui::SmallButton(T("Recompile game code", "Recompilar o código do jogo"))) setup_start(NULL), checked_n = -1;
+        ImGui::EndDisabled();
+    }
+    if (setup_running()) {
+        ImGui::ProgressBar(setup_progress(), ImVec2(-FLT_MIN, 0));
+        checked_n = -1;
+    }
+    ImGui::Separator();
+    ImGui::BeginChild("##cheatlist", ImVec2(0, 0));
+    for (int i = 0; i < n; i++) {
+        if (cheats_is_master(i) || cheats_is_hidden(i)) continue;
+        if (cheats_is_header(i)) { if (i > 0) ImGui::SeparatorText(cheats_name(i)); continue; }
+        bool on = cheats_enabled(i);
+        ImGui::PushID(i);
+        if (ImGui::Checkbox(cheats_name(i), &on)) cheats_set(i, on);
+        if (cheats_note(i)[0]) { ImGui::SameLine(); ImGui::TextDisabled("%s", cheats_note(i)); }
+        if (need && cheats_is_code(i)) { ImGui::SameLine(); ImGui::TextColored(k_yellow, "%s", T("(after Recompile)", "(depois de recompilar)")); }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+}
+
 // ------------------------------------------------------------------ the launcher's look
 #ifndef RT_CLASSIC_START_SCREEN
 #define RT_CLASSIC_START_SCREEN 0  // (console ports: 1 - a TV, a controller, no separate launcher window)
 #endif
-enum { PAGE_HOME, PAGE_OPTIONS, PAGE_CONTROLS, PAGE_FILES, PAGE_MODS };
+enum { PAGE_HOME, PAGE_OPTIONS, PAGE_CONTROLS, PAGE_FILES, PAGE_MODS, PAGE_CHEATS };
 static const int k_launcher_w = 1280, k_launcher_h = 720;  // (the game's own window size: some Wayland compositors
                                                               // never resize a window for its program)
 static ImFont *g_title_font, *g_button_font;  // (Baloo 2, the font of the game's button icons: runtime/nvn/glyphs.c)
@@ -1060,6 +1156,8 @@ extern "C" void launcher_lg_run(const char *root) {
     int detail_i = g_settings.detail >= 0 && g_settings.detail <= 3 ? g_settings.detail : 0;
     int shadows_i = g_settings.shadows >= 0 && g_settings.shadows <= 2 ? g_settings.shadows : 0;
     bool smooth_sh = g_settings.shadow_smooth;
+    int sharp_i = g_settings.sharpen >= 0 && g_settings.sharpen <= 3 ? g_settings.sharpen : 0;
+    int ups_i = g_settings.upscaler == UPSCALE_BILINEAR ? 1 : 0;
     int bg_i = g_settings.background >= 0 && g_settings.background <= 2 ? g_settings.background : 0;
     int pk_i = g_settings.pkhex_link >= 0 && g_settings.pkhex_link <= 2 ? g_settings.pkhex_link : 0;
     int shl_i = g_settings.shader_nowait ? 1 : 0;
@@ -1079,6 +1177,7 @@ extern "C" void launcher_lg_run(const char *root) {
         fps_i = fps_index(d.fps);
         wildb = d.wild_battle, prompts_i = d.button_prompts, crowd_i = d.crowd, detail_i = d.detail, shadows_i = d.shadows;
         smooth_sh = d.shadow_smooth, bg_i = d.background, pk_i = d.pkhex_link, shl_i = d.shader_nowait;
+        sharp_i = d.sharpen, ups_i = d.upscaler == UPSCALE_BILINEAR ? 1 : 0;
         gopt = k_gopt_default;
     };
     // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
@@ -1142,7 +1241,7 @@ extern "C" void launcher_lg_run(const char *root) {
     int page = PAGE_HOME;
     if (const char *pg = getenv("LARECOMP_LAUNCHER_PAGE"))
         page = !strcmp(pg, "options") ? PAGE_OPTIONS : !strcmp(pg, "controls") ? PAGE_CONTROLS : !strcmp(pg, "files") ? PAGE_FILES
-             : !strcmp(pg, "mods") ? PAGE_MODS : PAGE_HOME;
+             : !strcmp(pg, "mods") ? PAGE_MODS : !strcmp(pg, "cheats") ? PAGE_CHEATS : PAGE_HOME;
     if (getenv("LARECOMP_LAUNCHER_PAD") || getenv("LARECOMP_LAUNCHER_KEYS")) page = PAGE_CONTROLS;
     // The launcher is a small fixed window; the game gets its own size (or fullscreen) after Play (below). (Made at
     // that size; resized here when the window was there already - back from the game)
@@ -1155,6 +1254,10 @@ extern "C" void launcher_lg_run(const char *root) {
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
+    else if (setup_code_stale()) {  // (an updated app: the game code built again from the files set up already)
+        fprintf(stderr, "[launcher] the game code is another version's: building it again\n");
+        setup_start(NULL);
+    }
     if (const char *sf = getenv("LARECOMP_SETUP_FILES")) {  // (tests: "<base>|<update>|<dlc>|<keys>", as if picked and Recompile pressed)
         char f[4][1024] = {{0}};
         const char *q = sf;
@@ -1166,6 +1269,7 @@ extern "C" void launcher_lg_run(const char *root) {
         setup_start_files(f[0], f[1], f[2], f[3]);
     }
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
+    if (getenv("LARECOMP_CHEATS_DOWNLOAD")) cheats_download_start();  // (tests: the Cheats page's download, at once)
     static const float bg[4] = {0.08f, 0.08f, 0.10f, 1};
 #ifdef _WIN32
     static const SDL_DialogFileFilter mod_filters[] = {{"Mod (.zip, .rar, .7z) or plugin (.dll)", "zip;rar;7z;dll"}};
@@ -1204,6 +1308,15 @@ extern "C" void launcher_lg_run(const char *root) {
         const char *const shadow_names[] = {"Switch (1024)", T("High (2048)", "Alta (2048)"), T("Ultra (4096)", "Ultra (4096)")};
         ImGui::Combo(T("Shadows", "Sombras"), &shadows_i, shadow_names, 3);
         ImGui::Checkbox(T("Smooth shadow edges", "Suavizar as bordas das sombras"), &smooth_sh);
+        const char *const ups_names[] = {"AMD FSR 1", T("Bilinear", "Bilinear")};
+        ImGui::Combo(T("Upscaler", "Upscaler"), &ups_i, ups_names, 2);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", T("How a resolution below the window's reaches it: AMD FSR 1 (EASU upscale + RCAS sharpening) or a plain stretch.\n"
+                                      "Pick a Resolution lower than your screen (e.g. 1080p on a 1440p screen) for FSR to upscale.",
+                                      "Como uma resolução menor que a da janela chega a ela: AMD FSR 1 (EASU + nitidez RCAS) ou esticar.\n"
+                                      "Escolha uma resolução menor que a tela (ex.: 1080p numa tela 1440p) para o FSR ampliar."));
+        const char *const sharp_names[] = {T("Off", "Desligado"), T("Low", "Baixo"), T("Medium", "Médio"), T("High", "Alto")};
+        ImGui::Combo(T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)"), &sharp_i, sharp_names, 4);
         const char *const shl_names[] = {T("Wait (may stutter the first time)", "Esperar (pode travar na primeira vez)"),
                                          T("Don't wait (may show late the first time)", "Não esperar (pode aparecer atrasado na primeira vez)")};
         ImGui::Combo(T("Shader loading", "Carregamento de shaders"), &shl_i, shl_names, 2);
@@ -1532,7 +1645,8 @@ extern "C" void launcher_lg_run(const char *root) {
             y += 88 + 28;
             const struct { const char *en, *pt; int to; } rows[] = {
                 {"OPTIONS", "OPÇÕES", PAGE_OPTIONS}, {"CONTROLS", "CONTROLES", PAGE_CONTROLS},
-                {"GAME FILES", "ARQUIVOS DO JOGO", PAGE_FILES}, {"MODS", "MODS", PAGE_MODS}, {"EXIT", "SAIR", -1}};
+                {"GAME FILES", "ARQUIVOS DO JOGO", PAGE_FILES}, {"MODS", "MODS", PAGE_MODS}, {"CHEATS", "CHEATS", PAGE_CHEATS},
+                {"EXIT", "SAIR", -1}};
             for (const auto &r : rows) {
                 ImGui::SetCursorScreenPos(ImVec2(bx, y));
                 if (came_from >= 0 && r.to == came_from) ImGui::SetKeyboardFocusHere();  // (Exit's -1 isn't a page)
@@ -1551,8 +1665,8 @@ extern "C" void launcher_lg_run(const char *root) {
             ImGui::TextDisabled("v" RT_APP_VERSION);
             pad_hints(d, W - 34, H - 38, false, false);
         } else {
-            static const char *const titles_en[] = {"", "Options", "Controls", "Game Files", "Mods"};
-            static const char *const titles_pt[] = {"", "Opções", "Controles", "Arquivos do jogo", "Mods"};
+            static const char *const titles_en[] = {"", "Options", "Controls", "Game Files", "Mods", "Cheats"};
+            static const char *const titles_pt[] = {"", "Opções", "Controles", "Arquivos do jogo", "Mods", "Cheats"};
             float bar = 96;
             banner_sky(d, ImVec2(0, 0), ImVec2(W, bar));
             d->AddLine(ImVec2(0, bar), ImVec2(W, bar), IM_COL32(200, 236, 72, 120), 2);
@@ -1599,6 +1713,8 @@ extern "C" void launcher_lg_run(const char *root) {
                 game_files_section(win);
             } else if (page == PAGE_MODS) {
                 mods_page();
+            } else if (page == PAGE_CHEATS) {
+                cheats_page(win);
             }
             ImGui::PopItemWidth();
             ImGui::EndChild();
@@ -1700,6 +1816,8 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.detail = detail_i;
     g_settings.shadows = shadows_i;
     g_settings.shadow_smooth = smooth_sh;
+    g_settings.sharpen = sharp_i;
+    g_settings.upscaler = ups_i == 1 ? UPSCALE_BILINEAR : UPSCALE_FSR1;
     g_settings.background = bg_i;
     g_settings.pkhex_link = pk_i;
     g_settings.shader_nowait = shl_i;

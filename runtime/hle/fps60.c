@@ -663,6 +663,7 @@ void pla60_present(void) {
     }
     { extern void fscan_present(uint64_t frame); extern uint64_t renderer_present_count(void); fscan_present(renderer_present_count()); }
     { extern void za_options_present(void); za_options_present(); }
+    { extern void cheats_frame(void); cheats_frame(); }  // (runtime/cheats.c: the enabled cheats, ~12 times a second)
     { extern void menu_mouse_present(void); menu_mouse_present(); }
     if (g_pla60_entry && g_pla60_patched) {
         // Real-time steps (Settings Frame Timing, the default; Unlimited always): the world steps by the time that

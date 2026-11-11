@@ -39,7 +39,14 @@ In the launcher, **Game Files**:
 Already extracted files work too: **Select game folder…** and pick the folder holding `exefs` (`main`, `sdk`,
 `main.npdm`) and `romfs` (`arc/data.trpfs`) — or a flat folder with both, as hactool / an emulator dump writes them.
 
-**Recompile game code** (beside "ready to play") builds the game code again from the files already set up.
+**Recompile game code** (beside "ready to play") builds the game code again from the files already set up. After an
+update of the AppImage the launcher does this by itself when it is needed.
+
+### Mega Dimension DLC
+
+Pick the DLC's `.nsp` / `.xci` in the **Mega Dimension DLC** row. With base + update packages it is read along with them;
+when the game is set up already (any way, extracted files too) **Add the DLC picked above** reads it with your prod.keys
+and adds it (`dlc.bin` in the data folder) - no recompile; it is active from the next start of the game.
 
 ## Where things are
 
@@ -68,6 +75,16 @@ Everything from the `LegendsZA` branch of LZA-Recomp (1.1.0-rc1):
   - **Steam relay**: Link Trades and Private Battles with Steam friends (off until switched on)
   - **Legends Lua**: Lua scripting (off until switched on; scripts in the data folder's `lua/`; the research scripts are
     in `lua-examples/` as examples)
+- **Cheats** (launcher page *Cheats*, and in game with **F2** or **Minus + R**): Atmosphère-format cheat codes (as EdiZon /
+  Breeze use them), run on the game's memory about 12 times a second like on a Switch. **Download the GBAtemp cheat
+  database** fetches the newest zip of the "Pokemon Legends Z-A Cheat Database" thread (curl or wget needed) and installs
+  the 2.0.2 file (`cheats/B1F12FD919EAE86A.txt` + `notes.txt`); **Import a cheat file…** takes any `.txt` or `.zip`.
+  Most Z-A cheats rewrite the game's instructions: the game code is compiled with every instruction the cheat file can
+  put there (the launcher offers **Recompile game code** once, a few minutes), and from then on they switch on and off
+  live; switching one off puts the game's own code back (no "Restore Code" needed). Data cheats work at once.
+- **FSR / sharpening**: Options → Graphics → *Upscaler* (AMD FSR 1: EASU upscale + RCAS, or Bilinear) applies when the
+  Resolution is below the window's (e.g. 1080p on a 1440p screen); *Sharpening* (AMD RCAS: Off / Low / Medium / High)
+  at the window's resolution. Both are in the game's own Settings too.
 - Local wireless play between copies (Link Trades, Private Battles), the Mega Dimension DLC when its `.nsp` is picked
 
 ## Licenses
