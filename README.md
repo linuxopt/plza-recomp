@@ -1,184 +1,299 @@
-# PL:Z-A Recomp (LZ&A Recomp, branch `LegendsZA`)
+# PLZA-Recomp: Pokémon Legends: Z-A for Linux (AppImage)
 
-A native PC port of **Pokémon Legends: Z-A** (Nintendo Switch, **version 2.0.2**) by **static recompilation**: the game's
-ARM64 code is translated to C and compiled into a regular Windows or Linux program, with a runtime standing in for
-the Switch's operating system (kernel, system services, NVN graphics on Vulkan, audio, controllers).
+A native Linux build of **Pokémon Legends: Z-A** (Nintendo Switch, **version 2.0.2**) by static recompilation, packed
+as a single **AppImage** that runs on most distributions. It is based on
+[LZA-Recomp](https://gitlab.com/mr.wifi1143/LZA-Recomp) (branch `LegendsZA`) by MrWifi, with Linux packaging and
+extra features:
 
-LZ&A Recomp has one branch per game:
+- one-file AppImage for any distro with glibc 2.31+ (nothing to install but a GPU driver)
+- pick your **base game**, **2.0.2 update**, **Mega Dimension DLC** (`.nsp` / `.xci`) and **prod.keys** one by one in
+  the launcher, then **Recompile** - or add the DLC on its own later
+- **cheats**: Atmosphère cheat codes (EdiZon / Breeze format), the GBAtemp cheat database downloadable from the launcher,
+  toggled live in game (**F2**)
+- **field of view** slider, **AMD FSR 1** upscaling and **RCAS sharpening**
+- every frame rate (30 / 60 / 72 / 120 / 144 / Unlimited) without an "experimental" switch: scripted scenes play at 60
+  and battles at up to 144 by themselves
+- fixes: a freeze right after the name entry on AMD GPUs (RADV), setup from flat extracted dumps
 
-- **`LegendsA`**: Pokémon Legends: Arceus (PL:A Recomp)
-- **`LegendsZA`** (this branch): Pokémon Legends: Z-A (PL:Z-A Recomp)
-
-> **No game files are included, and none ever will be.** You need your own dump of the game and its 2.0.2 update.
-> Nothing derived from the game (game code, recompiled or not, assets, keys) is in this repository or its releases.
-
-> **Version 2.0.2 only.** The recomp is made for Z-A 2.0.2 (base game 1.0.0 + the 2.0.2 update, main build
-> `B1F12FD919EAE86A`). Other versions (2.0.0, or the base game without its update) are not supported: the start
-> screen tells you so if you pick them. Update the game to 2.0.2 on your Switch and dump it again.
-
-> This project was made largely with AI (Anthropic's Claude, through Claude Code), directed and tested by a human.
-
-![The launcher](docs/launcher.png)
-
-## Playing on Windows
-
-1. Download `LZA-Recomp-ZA-windows-v<version>.zip` from the [releases](https://gitlab.com/mr.wifi1143/LZA-Recomp/-/releases)
-   and unzip it somewhere you can write to, on a short path (e.g. `C:\Games\`; not Program Files, not a deeply nested folder).
-2. Put your dumped game files in one folder: the base game and the 2.0.2 update (`.nsp` / `.xci`, below).
-3. Run `ZARecomp.exe` (not code-signed: "More info" -> "Run anyway" if Windows asks), click **Set up game** ->
-   **Select game folder...** and pick that folder.
-4. Wait while the game files are read and the game code is generated and compiled for your PC. This happens once,
-   and takes from several minutes on a big CPU to much longer on a small one.
-5. Click **Play**. The first start also prepares the shaders once (a progress bar).
-
-Requirements: Windows 10/11 64-bit, a CPU with AVX2 (Intel 2013+ / AMD Zen+), a GPU with Vulkan 1.3 and a current
-driver, ~25 GB free disk space during setup.
-
-## Playing on Linux
-
-One line in a terminal (Arch / Manjaro / EndeavourOS, Debian 13+ / Ubuntu 25.04+ and their derivatives, Fedora): it
-downloads this branch, installs what it needs (asks for your password only if something is missing), builds the
-program and starts it.
-
-```sh
-git clone -b LegendsZA https://gitlab.com/mr.wifi1143/LZA-Recomp.git PLZA-Recomp && cd PLZA-Recomp && ./tools/linux/install.sh && ./play.sh
-```
-
-In the launcher click **Set up game** -> **Select game folder...** and pick the folder with your dumped `.nsp` / `.xci` files
-(below); the game code is built for your PC once. Later, start it again with `./play.sh` in that folder. To update:
-`git pull && ./tools/linux/install.sh`.
-
-
-Requirements: x86-64 with AVX2, a GPU with a Vulkan 1.3 driver (Mesa or NVIDIA), ~25 GB free during setup.
-
-## Your game files
-
-What you need, all from your own Switch:
-
-- the base game and the **2.0.2 update**, dumped as `.nsp` (or `.xci` for the game card)
-- `prod.keys` (dumped with Lockpick_RCM)
-- optional: the Mega Dimension DLC `.nsp`, if you own it
-
-Put the `.nsp` / `.xci` files in one folder and pick it in the launcher (**Game Files**). The recomp reads them itself, like the
-emulators do: it applies the 2.0.2 update over the base game, writes only what it needs (the game code, one RomFS
-image, the DLC's data) and never changes your dumps. It looks for `prod.keys` in that folder first, then in `.switch`
-in your home folder and in the emulators' key folders (Eden, Yuzu and its forks, Ryujinx). Title keys come from the
-tickets inside the `.nsp` files, or from a `title.keys` beside `prod.keys`.
-
-Compressed dumps (`.nsz` / `.xcz`) aren't read: decompress them first (`nsz -D`). If several updates are in the
-folder, the newest one that is 2.0.2 is used; the base game alone or another update won't work (the launcher
-says "This needs Pokémon Legends: Z-A version 2.0.2").
-
-**Mega Dimension (the DLC, optional).** Not needed to play. If its `.nsp` is in the folder, the game sees the DLC as
-on a Switch that owns it (its only file is an empty `keyfile.dat`; what it unlocks ships in the update). Without
-it, the game runs as without the DLC.
-
-**Already extracted files** work too: pick the folder with `exefs` (`main`, `sdk`, `main.npdm`) and `romfs` (with
-`arc/data.trpfs`), extracted with the 2.0.2 update applied (e.g. `hac2l -k prod.keys --titlekeys=title.keys
---basenca=<base program>.nca --exefsdir=game/exefs --romfsdir=game/romfs <update program>.nca`), plus an optional
-`dlc` folder beside them with the DLC's RomFS.
-
-Which update is a dump? `lasrecomp.log` lists the packages found with their versions: update v393216 (patch v6) is
-**2.0.2**; v262144 (v4) is 2.0.0. The update's `control.nacp`
-also holds the display version ("2.0.2"). The extracted `exefs/main` of 2.0.2 has the build id `B1F12FD919EAE86A`
-(bytes 0x40..0x47 of the file).
-
-Set up with other files before (2.0.0, say): the launcher shows the version message; pick the folder with the
-2.0.2 files with **Select game folder...** and the game code is built again for it. Saves stay where they are (2.0.2
-loads saves made with 2.0.0).
-
-## Status
-
-Playable through the opening into Lumiose City: boot, character creation, the intro, the station, Lumiose free roam.
-Tested on Linux with an RTX 4090; the Windows build is tested under Wine.
-
-- Frame rates: 30 (the game's own), 60, 120 or 144 fps, with the game, its UI and its cutscenes at the right speed
-  (cutscenes follow real time, so they stay with their audio).
-- Graphics: GPU-culled and instanced props (station facade, iron work, trees, hedges, lamp posts), cast shadows,
-  SMAA. Resolution the game's own way: the Internal resolution option sets the screen size Z-A renders for (1440p,
-  4K...: its scene at 0.65 of it, upscaled by its own upscaler, every pass at the new size); 1080p is the Switch's.
-- NPCs animate every frame (the game's own animation level of detail is bypassed).
-- Launcher, like an older PC game's: **Play**, **Options** (display, graphics, game: resolution, fullscreen,
-  anti-aliasing, frame rate, FPS counter, button prompts... with this PC's recommended settings), **Controls**
-  (controller test and remapping, keyboard remapping), **Game Files**, **Mods**. "Skip the launcher" goes straight
-  to the game from then on (hold Shift while starting to see it again, or set Start Screen in the game's Settings).
-  The older one-window start screen is kept for console ports: `LARECOMP_START_SCREEN=classic`.
-- The game's own Settings screen (Menu -> Help & Settings -> Settings) has the launcher's settings too, as rows
-  like the game's: frame rate, resolution, screen mode, anti-aliasing, button prompts and FPS counter on Gameplay,
-  mouse camera, mouse sensitivity and stick dead zone on Camera, master volume on Sound. They apply at once (frame
-  rate and resolution: from the next start) and are saved with the launcher's. Its Controls row opens the key
-  bindings there: each action with its key and its controller button (the controller's own button icon); select one
-  and press the new key on the keyboard or the new button on the controller (or click the key / the button).
-- Button prompts for what you play with: the bound keys and mouse buttons, Xbox letters or PlayStation shapes instead
-  of the Switch's (Auto follows the last used keyboard / mouse or controller, even when it changes while playing;
-  remapped buttons show their new button).
-- Keyboard and mouse: WASD (Left Ctrl walks), mouse look (click to take the mouse, Esc lets it go: the camera turns by
-  as much as the mouse moves - the sensitivity is degrees per pixel - while a controller's stick still turns it the
-  game's way), mouse buttons and wheel bindable like keys. The game's menus work with the keyboard and the mouse:
-  pointing at a button moves the game's cursor to it, a click presses it (on the Settings screen: the choice, the
-  point on a bar or the tab clicked), the right button goes back, the wheel scrolls; where there's nothing to point
-  at (a message, a tip) a click goes on.
-- PKHeX: saves are the Switch's own files (`save/save_0/main`), so PKHeX opens them (close the game first). Settings
-  -> Gameplay -> **PKHeX Link** lets PKHeX's LiveHeX plugin (PKHeX-Plugins) connect to the running game and read and
-  write your boxes, as it does with sys-botbase on a Switch: in LiveHeX, IP `127.0.0.1` (Network: this PC's address),
-  port 6000. **Pokémon Files** (A on it): Export saves every Pokémon in your boxes as a `.pa9` file in
-  `pokemon/export/<date>/`; Import puts the `.pa9` files in `pokemon/import/` into the first empty box slots (placed
-  files move to `pokemon/import/done/`). Save in the game afterwards to keep imported Pokémon.
-
-Known issues:
-
-- Lumiose free roam (1440p, Draw Distance Max, Ultra shadows; RTX 4090, i9-12900K): about 180 fps uncapped (1% low
-  ~126). On CPUs with 6+ fast cores the game gets up to three job threads more than the Switch's three
-  (`extra_workers = auto`, the default; `0` keeps the Switch's three: about 167 fps there).
-- The Unlimited frame rate is hidden for now: battles were reported slow at it (enemies late to pick a move, a switched
-  Pokémon not sent out) and are being retested; 30-144 fps are not affected.
-- On a fresh install, shaders and pipelines compile the first time they are seen (short stutters).
-- Expect other missing effects and bugs.
-
-## Building from source (Linux, by hand)
-
-What the script does, step by step. Requirements: clang + lld, SDL 3, FFmpeg, shaderc, the Vulkan loader, Python 3.
-
-```sh
-python3 -m venv .venv && .venv/bin/pip install lz4 capstone unicorn
-make -j$(nproc) all SHADERC=-lshaderc_shared  # build/lasrecomp (Debian / Ubuntu: SHADERC=-lshaderc)
-mkdir -p extracted && ./play.sh               # the launcher sets up your game files and builds the game code
-```
-
-For development, with the game code built by the Makefile instead: your own Z-A 2.0.2 files in extracted/exefs
-(main, sdk, main.npdm) and extracted/romfs, then
-
-```sh
-make gen                                      # translate the game code into generated/
-make -j$(nproc) all SHADERC=-lshaderc_shared  # build/lasrecomp + build/lasgame.so
-cc -O2 -Iruntime tools/romfs/mkromfs.c runtime/romfs_build.c -o build/mkromfs
-./build/mkromfs extracted/romfs extracted/romfs.bin
-./play.sh                                     # launcher, then the game (--play skips it)
-```
-
-`SHADERC=-lshaderc_shared` is for distributions that ship only the shared shaderc library, such as Arch.
-
-`make gen` stops with a message on a 2.0.0 `main`. The runtime's Z-A addresses (hooks, patched data, the comments
-that cite them) are 2.0.2's. For a future update, `tools/port_addrs.py` finds each of them in the new `main` and can
-rewrite the Z-A sources in place (its header says how, and which addresses needed a hand between 2.0.2 and 2.0.0).
-
-The Windows release is cross-built from Linux with zig: see `tools/windows/README.md`.
-
-ARM Linux (experimental; tested on a Steam Frame: SteamOS, Snapdragon, Adreno 750 with Mesa's Turnip) builds the same
-way on the device: `make gen` there writes AArch64-flavoured game code (the game's FP / SIMD as inline assembly). SteamOS
-has no SDL 3 package: build SDL 3 from source into a prefix and pass it as `DEPS=<prefix>` (and put `<prefix>/lib` in
-`LD_LIBRARY_PATH` to run). Adreno needs no settings: its driver can't map the game's memory, so the game's heap is
-made of GPU memory there, and its 64-lane subgroups run the game's 32-lane warp code in slices (see `CHANGELOG.md`).
-Headsets and handhelds heat up fast: a first run compiles thousands of shaders on every core.
-
-Never commit or share `extracted/`, `generated/`, `build/` (the built game library is recompiled game code), `save/`
-or anything else that comes from the game. See `CONTRIBUTING.md`.
-
-## Credits and license
-
-Built on [letsgo-recomp](https://github.com/raulzrrs/letsgo-recomp) (Pokémon: Let's Go) by raulzrrs, itself a fork of
-[LAS Recomp](https://github.com/peiikai/LASRecomp) (Link's Awakening) by Peiikai. MIT licensed: `LICENSE` and
-`LICENSE-LASRecomp`. Third-party components keep their own licenses: `THIRD-PARTY-NOTICES.md`.
+> **No game files, keys or game code are included, and none ever will be.** You need your own dump of the game and
+> its 2.0.2 update, and your own `prod.keys`, from your own Switch. The game code is generated and compiled on your PC
+> from your dump, once.
 
 Pokémon Legends: Z-A is © Nintendo / Creatures Inc. / GAME FREAK inc. / The Pokémon Company. This project is not
 affiliated with or endorsed by them.
+
+---
+
+## Contents
+
+1. [Requirements](#requirements)
+2. [Download and install](#download-and-install)
+3. [Your game files: base game (XCI / NSP), update, DLC, keys](#your-game-files)
+4. [Mega Dimension DLC](#mega-dimension-dlc)
+5. [Cheat codes](#cheat-codes)
+6. [Options worth knowing](#options-worth-knowing)
+7. [Where your data is](#where-your-data-is)
+8. [Troubleshooting](#troubleshooting)
+9. [Building the AppImage yourself](#building-the-appimage-yourself)
+10. [Credits and license](#credits-and-license)
+
+---
+
+## Requirements
+
+- **CPU**: x86-64 with **AVX2** (Intel Haswell / 2013 or newer, AMD Zen or newer)
+- **GPU**: a **Vulkan 1.3** driver - Mesa (RADV for AMD, ANV for Intel, NVK) or NVIDIA's - and the Vulkan loader
+  (`libvulkan.so.1`: package `vulkan-icd-loader` on Arch, `libvulkan1` on Debian / Ubuntu, `vulkan-loader` on Fedora)
+- **Linux**: glibc 2.31 or newer - Ubuntu 20.04+, Debian 11+, Fedora 32+, Arch / Manjaro / EndeavourOS / CachyOS,
+  SteamOS 3, openSUSE Leap 15.3+ / Tumbleweed, Linux Mint 20+, Pop!_OS 20.04+
+- **Disk**: about **25 GB** free during setup (about 8 GB stays: the game data image and the compiled game code)
+- **RAM**: 16 GB recommended
+- `curl` or `wget` (only for downloading the cheat database)
+
+Python, the compiler (zig), SDL 3, FFmpeg and shaderc are inside the AppImage.
+
+## Download and install
+
+1. Download `ZARecomp-<version>-x86_64.AppImage` from the
+   [Releases](https://github.com/linuxopt/plza-recomp/releases) page.
+2. Make it executable and start it:
+
+   ```sh
+   chmod +x ZARecomp-*-x86_64.AppImage
+   ./ZARecomp-*-x86_64.AppImage
+   ```
+
+   Or in a file manager: right-click → Properties → Permissions → "Allow executing", then double-click it.
+3. Optional: add it to your application menu (it copies itself to `~/Applications`):
+
+   ```sh
+   ./ZARecomp-*-x86_64.AppImage --install      # --uninstall removes the menu entry again
+   ```
+
+If it says **FUSE** is missing, install `fuse3` (or `fuse` / `libfuse2`), or start it with
+`--appimage-extract-and-run`. On **Steam Deck / SteamOS** add it as a non-Steam game (it switches to an X11 window by
+itself so Steam Input works).
+
+**Updating**: download the new AppImage and replace the old file. Your game files, saves and settings stay; if the new
+version needs the game code built again, the launcher does it by itself the first time (a few minutes).
+
+## Your game files
+
+You need, dumped from **your own Switch**:
+
+| What | File | Notes |
+|---|---|---|
+| Base game | `.xci` (game card) or `.nsp` | Pokémon Legends: Z-A 1.0.0, title id `0100F43008C44000` |
+| Update | `.nsp` | **2.0.2** (v393216). Other updates (2.0.0, v262144) are not supported |
+| Mega Dimension DLC | `.nsp` (or `.xci`) | optional |
+| Keys | `prod.keys` | dumped with Lockpick_RCM; `title.keys` beside it is read too |
+
+Dump the game and update with a homebrew dumper (e.g. nxdumptool / DBI) and the keys with Lockpick_RCM on the same
+Switch (keys from a recent system version open the 2.0.2 update). Compressed dumps (`.nsz` / `.xcz`) must be
+decompressed first: `nsz -D file.nsz`.
+
+### Setting up (once)
+
+1. Start the AppImage. In the launcher open **GAME FILES**.
+2. **Base game** → *Browse…* → pick your `.xci` or `.nsp`.
+3. **Game update** → *Browse…* → pick the 2.0.2 update `.nsp`.
+4. **Mega Dimension DLC** (optional) → *Browse…* → pick the DLC `.nsp` / `.xci`.
+5. **prod.keys** → *Browse…* → pick your `prod.keys`. If one is already in a usual place (beside the base game,
+   `~/.switch/`, or the Eden / Yuzu / Ryujinx key folders) it is shown in yellow and used when you don't pick one.
+6. Click **Recompile the game**. The launcher
+   - reads your packages with your keys and applies the 2.0.2 update over the base game,
+   - writes the game data image (~6 GB) and the DLC's data,
+   - generates the game code and compiles it for your PC (about 5 minutes on a 12-core CPU, longer on smaller ones).
+7. When it says **ready to play**, go back and press **PLAY**. The first start also prepares the shaders (a progress
+   bar; short stutters the first time new things appear are normal).
+
+Your picks are remembered. Your dump files are only read, never changed - you can delete or move them afterwards.
+
+**Already extracted files** work too: under *Or: already extracted files* click **Select game folder…** and pick the
+folder with `exefs` (`main`, `sdk`, `main.npdm`) and `romfs` (`arc/data.trpfs`) of 2.0.2 - or one flat folder with
+`main`, `sdk`, `main.npdm` and `arc/` side by side, as some tools extract it.
+
+**Recompile game code** (beside "ready to play") builds the game code again from the files already set up - needed
+after you add code cheats (see below).
+
+If something is wrong the launcher says what: wrong version ("needs version 2.0.2"), no keys, keys too old, only the
+update found, compressed files. Details are in `lasrecomp.log` (see [Where your data is](#where-your-data-is)).
+
+## Mega Dimension DLC
+
+The DLC is optional; without it the game runs as on a Switch that doesn't own it.
+
+- **While setting up from packages**: pick it in the *Mega Dimension DLC* row before *Recompile the game*.
+- **Adding it later** (also when you set the game up from extracted files): pick its `.nsp` / `.xci` in the
+  *Mega Dimension DLC* row, then click **Add the DLC picked above**. It is read with your `prod.keys`; nothing is
+  recompiled. The line above the button then says *Mega Dimension DLC: set up*. It is active from the next start of the
+  game - the title screen shows "Downloadable content ready".
+- **Replacing it**: pick another file and click *Replace with the DLC picked above*.
+
+## Cheat codes
+
+The **CHEATS** page of the launcher, and the **Cheats panel in game** (**F2** on the keyboard, **Minus + R** on a
+controller; Esc / B closes it), run Atmosphère-format cheat codes - the `.txt` files EdiZon, Breeze and the emulators
+use - on the game's memory, about 12 times a second like on a Switch.
+
+### Getting cheats
+
+- **Download the GBAtemp cheat database**: fetches the newest file of the
+  [Pokemon Legends Z-A Cheat Database](https://gbatemp.net/threads/pokemon-legends-z-a-cheat-database.675579/)
+  thread (needs `curl` or `wget` and an internet connection) and installs the one for 2.0.2 with its descriptions.
+  Click it again later to update.
+- **Import a cheat file…**: any cheat `.txt` for build `B1F12FD919EAE86A` (Z-A 2.0.2), or a `.zip` of cheats (the
+  database's own zip, a `LEGENDSZA/.../cheats/` folder layout) - the right file is picked out of it.
+- **By hand**: put the file in the data folder as `cheats/B1F12FD919EAE86A.txt` (and Breeze's `notes.txt` beside it
+  for the descriptions). **Open the cheats folder** opens it.
+
+### Using them
+
+1. After installing or changing a cheat file the page may say *Code cheats take effect once the game code is compiled
+   with this cheat file* - click **Recompile game code** (a few minutes, once per cheat file). Why: most Z-A cheats
+   change the game's own instructions, and in a recompilation those instructions are compiled code; the build
+   compiles every instruction the cheat file can put at each place it patches, so they can be switched on and off
+   later without rebuilding.
+2. Tick the cheats you want - in the launcher before playing, or in game with **F2** / **Minus + R**. They apply at
+   once and stay on for the next start (`cheats/enabled.txt`).
+3. Untick a cheat to switch it off: the game's own code is put back by itself, so the file's *Restore Code* entry is
+   not needed (it is hidden). **All off** switches everything off.
+4. Cheats with a button in their description ("Hold ZL to run fast", "Hold B to float", "R3 + ↑ / ↓") react to those
+   buttons on your controller, or the keys bound to them.
+
+Cheats that only change data (money values, pointers like the Moon Jump) work without the recompile. A cheat for
+another game version won't do anything useful - keep to files for build `B1F12FD919EAE86A`. Cheats can break saves:
+**back up `save/`** before trying ones that change items, Pokémon or progress. As on a Switch, some cheats conflict with
+each other (two that use the same code cave) - turn one off.
+
+### Writing your own
+
+Cheat files are plain text in Atmosphère's format:
+
+```
+[My cheat name]
+04000000 00A71864 B9004009
+```
+
+`[Name]` starts a cheat, `{Name}` a master code (always on), the lines are 8-digit hex code words. All of Atmosphère's
+code types work: static writes (0), memory / key / register conditionals (1, 8, C0, C4), loops (3), register loads
+and arithmetic including float operations (4, 5, 7, 9), register stores (6, A), saved / static registers (C1-C3).
+Memory region 0 is the game's main module, 1 the heap. After editing the file, recompile the game code if you added
+writes to code.
+
+## Options worth knowing
+
+All in the launcher's **OPTIONS** and in the game's own Settings (Menu → Help & Settings → Settings):
+
+- **Frame rate** 30 / 60 / 72 / 120 / 144 / Unlimited. Above 60, scripted scenes switch to 60 fps by themselves and
+  back after; at Unlimited, battles are held at 144.
+- **Field of view** (Graphics; in game: Camera tab): 70-170 % of the game's own camera angle, applies at once.
+- **Resolution** (540p - 4K, or Automatic) with **Upscaler**: AMD FSR 1 or Bilinear - FSR upscales when the resolution
+  is below your window's (e.g. 1080p on a 1440p screen); **Sharpening** (AMD RCAS): Off / Low / Medium / High.
+- Shadows (up to 4096), draw distance for people and detail, SMAA, FPS counter, shader loading Wait / Don't wait.
+- **Controls**: controller test and remapping, keyboard and mouse (WASD, mouse look - click to take the mouse, Esc
+  lets it go), button prompts for Xbox / PlayStation / keyboard.
+- **Mods**: translations and texture packs (`.zip` / `.rar` / `.7z`), plugins: *Steam relay* (Link Trades and Private
+  Battles with Steam friends) and *Legends Lua* (Lua scripting; examples in the data folder's `lua-examples/`).
+- **PKHeX**: saves are the Switch's own files (`save/save_0/main`); *PKHeX Link* (Gameplay tab) lets PKHeX's LiveHeX
+  connect on port 6000; *Pokémon Files* exports / imports `.pa9`.
+
+In game: **Esc** / **F1** asks to close the game, **F11** or Alt+Enter toggles fullscreen, **F12** takes a screenshot,
+**F2** opens the Cheats panel. Hold **Shift** while starting to see the launcher again if you ticked *Skip the launcher*.
+
+## Where your data is
+
+Game files, saves, settings, cheats, mods, shader caches and the log `lasrecomp.log` live in the data folder:
+
+- `~/.local/share/zarecomp` by default (`./ZARecomp-*.AppImage --data-dir` prints it);
+- **portable**: create a folder named `ZARecomp-data` next to the AppImage and everything goes there instead (handy
+  for another drive - it needs ~8 GB);
+- or set `LARECOMP_DATA_ROOT=/some/folder`.
+
+| Path | What |
+|---|---|
+| `extracted/` | the set-up game files and the compiled game code (made from your dump: don't share it) |
+| `save/save_0/main` | your save (PKHeX opens it) |
+| `cheats/` | `B1F12FD919EAE86A.txt`, `notes.txt`, `enabled.txt` |
+| `larecomp.ini` | settings |
+| `lasrecomp.log` / `lasrecomp-prev.log` | the log of this / the previous run |
+| `mods/`, `plugins/`, `lua/` | mods, plugins, Lua scripts |
+
+To start over, delete `extracted/` (your saves stay).
+
+## Troubleshooting
+
+- **"This needs a CPU with AVX2"** - the game code is built for x86-64-v3; older CPUs can't run it.
+- **"No Vulkan loader"** / a black window - install your distribution's Vulkan package and a current GPU driver.
+  `vulkaninfo --summary` should list your GPU with API 1.3 or newer.
+- **The launcher says "needs version 2.0.2"** - your update isn't 2.0.2 (2.0.0 is v262144). Update the game on your
+  Switch and dump the update again.
+- **"No keys found" / "Your keys can't open those game files"** - pick your `prod.keys` in the prod.keys row; dump it
+  again from your Switch on its current system version if it is older than the update.
+- **Setup fails while compiling** - check there is space in the data folder, then look at the end of `lasrecomp.log`.
+- **Stutters the first time** - shaders are compiled as new things appear; they are cached for later. For a frame time
+  overlay start it with MangoHud: `mangohud ./ZARecomp-*-x86_64.AppImage`.
+- **Code cheats do nothing** - the CHEATS page says if the game code needs a *Recompile game code* for the current
+  cheat file.
+- **A freeze or crash** - attach `lasrecomp.log` (and `lasrecomp-prev.log`) when you report it in the Issues.
+
+## Building the AppImage yourself
+
+Everything that goes into the AppImage is built from source here, except the official prebuilt downloads it pins by
+checksum (zig, a portable CPython, three Python wheels, appimagetool). On an x86-64 Linux machine:
+
+**1. Build tools and headers**
+
+```sh
+# Arch / Manjaro / EndeavourOS / CachyOS
+sudo pacman -S --needed base-devel git curl cmake ninja python patchelf zstd unzip wayland wayland-protocols libxkbcommon \
+  libdecor libpipewire libpulse alsa-lib dbus systemd-libs libx11 libxext libxrandr libxcursor libxi libxfixes libxss \
+  vulkan-headers vulkan-icd-loader
+# Debian 12+ / Ubuntu 22.04+
+sudo apt install build-essential git curl xz-utils cmake ninja-build pkg-config python3 patchelf zstd unzip \
+  libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev \
+  libdbus-1-dev libudev-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
+  libvulkan-dev
+# Fedora
+sudo dnf install gcc gcc-c++ make git curl cmake ninja-build pkgconf python3 patchelf zstd unzip wayland-devel \
+  wayland-protocols-devel libxkbcommon-devel libdecor-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel \
+  dbus-devel systemd-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXi-devel libXfixes-devel \
+  libXScrnSaver-devel vulkan-headers vulkan-loader-devel
+```
+
+**2. Build**
+
+```sh
+git clone https://github.com/linuxopt/plza-recomp.git
+cd plza-recomp
+tools/linux/build_appimage.sh
+```
+
+The first run downloads ~200 MB and builds SDL 3, FFmpeg and shaderc (a few minutes); the result is
+`~/.cache/plza-appimage-build/dist/ZARecomp-<version>-x86_64.AppImage`. Set `LZA_LINUXBUILD=/path` to use another
+build folder, `JOBS=<n>` for the parallel jobs, `FORCE=1` to rebuild the libraries.
+
+How it is made portable: every C / C++ part is compiled with zig for `x86_64-linux-gnu.2.31`, so the binaries need
+nothing newer than glibc 2.31; the libraries are built with their Linux backends loaded at run time (X11 / Wayland /
+PipeWire / PulseAudio / ALSA), the Vulkan loader is the player's own. `tools/linux/make_appimage.sh` assembles the
+AppDir (runtime, libraries, plugins, the portable Python with the game code generator, a trimmed zig for compiling the
+game code on the player's PC, the licenses) and refuses to finish if anything from a game ended up in it.
+
+**Development build** (without the AppImage, using your system's clang): see
+[docs/README-upstream.md](docs/README-upstream.md) ("Building from source").
+
+Source layout: `runtime/` the runtime (kernel, services, NVN on Vulkan, launcher `runtime/ui/launcher_lg.mm`, cheats
+`runtime/cheats.c`), `tools/gen.py` + `tools/lifter.py` the game code generator, `contrib/` the plugins,
+`tools/linux/` the AppImage scripts.
+
+## Credits and license
+
+- [LZA-Recomp](https://gitlab.com/mr.wifi1143/LZA-Recomp) by MrWifi - the Z-A recompilation this is built from
+- [letsgo-recomp](https://github.com/raulzrrs/letsgo-recomp) by raulzrrs and [LAS Recomp](https://github.com/peiikai/LASRecomp)
+  by Peiikai - the projects it descends from
+- Cheat database: the contributors of the GBAtemp "Pokemon Legends Z-A Cheat Database" thread (not included; downloaded
+  by the player)
+
+MIT licensed: [LICENSE](LICENSE) and [LICENSE-LASRecomp](LICENSE-LASRecomp). Third-party components keep their own
+licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); the AppImage has them all in `opt/zarecomp/licenses/`.
+Unicorn (used only by the game code generator) is GPL 2.0; FFmpeg is LGPL 2.1, shipped as separate shared libraries.

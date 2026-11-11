@@ -98,7 +98,7 @@ cp third_party/licenses/GPL-2.0.txt "$O/licenses/unicorn-COPYING-GPL-2.0.txt"
 for f in "$L"/deps-src/SDL3-*/LICENSE.txt; do [ -f "$f" ] && cp "$f" "$O/licenses/SDL3-LICENSE.txt"; done
 for f in "$L"/deps-src/FFmpeg-*/COPYING.LGPLv2.1; do [ -f "$f" ] && cp "$f" "$O/licenses/FFmpeg-COPYING.LGPLv2.1.txt"; done
 for f in "$L"/deps-src/shaderc-*/LICENSE; do [ -f "$f" ] && cp "$f" "$O/licenses/shaderc-LICENSE.txt"; done
-cp tools/linux/README-AppImage.md "$O/README.md"
+cp README.md "$O/README.md"
 
 # the AppImage's own files
 install -m755 tools/linux/AppRun "$A/AppRun"

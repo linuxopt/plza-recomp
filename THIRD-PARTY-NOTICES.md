@@ -58,3 +58,13 @@ this repository.
 
 No part of any Nintendo / The Pokémon Company / Game Freak game is included: no game files, no keys, no game code
 (recompiled or not). Players supply their own dump; the game code is generated from it on their own PC.
+
+## The Linux AppImage (tools/linux/build_appimage.sh)
+
+Built from the unmodified sources by tools/linux/build_appimage.sh (each download pinned by its SHA-256 there) and
+shipped as shared libraries in `opt/zarecomp/lib/`: SDL 3.4.18 (zlib), FFmpeg 9.0.2 as LGPL with the configure line
+above but for Linux (`--enable-shared --disable-static --disable-x86asm ...`), shaderc 2026.4 with glibc-free
+glslang / SPIRV-Tools of the commits in that script (Apache 2.0 / BSD). The game code builder ships zig 0.17.0 for
+Linux (trimmed to compiling C for x86-64 Linux), python-build-standalone CPython 3.12.16 (release 20261110, PSF license
+and its parts' licenses) and the capstone 5.0.9, unicorn 2.1.4 (GPL 2.0) and lz4 4.4.5 manylinux wheels from PyPI.
+The AppImage runtime is appimagetool's (MIT). Every license text is in `opt/zarecomp/licenses/`.
