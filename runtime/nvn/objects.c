@@ -282,7 +282,11 @@ NVN(nvnMemoryPoolInitialize) {
 uint64_t g_nvn_destroyed;
 NVN(nvnMemoryPoolFinalize) {
     if (ENV("LARECOMP_LOG_POOLS")) LOG("[nvn] pool %llx finalized (lr %llx)\n", (unsigned long long)A(0), (unsigned long long)c->x[30]);
-    g_nvn_destroyed++; rt_drain(); free(HOST(NvnPool, A(0))); SET_HOST(A(0), 0);
+    g_nvn_destroyed++; rt_drain();
+    NvnPool *p = HOST(NvnPool, A(0));
+    extern void cmdbuf_pool_gone(uint64_t mem, uint64_t size);
+    if (p) cmdbuf_pool_gone(p->storage, p->size);  // (out-of-line command records in its chunks: cmdbuf.c)
+    free(p); SET_HOST(A(0), 0);
 }
 NVN(nvnMemoryPoolSetDebugLabel) { (void)c; }
 NVN(nvnMemoryPoolMap) { RET(HOST(NvnPool, A(0))->storage); }
@@ -518,6 +522,22 @@ static void obj_slot_add(uint64_t obj, NvnDescPool *d, int id) {
     }
     pthread_mutex_unlock(&g_os_lock);
 }
+// A slot registered with another object now: off obj's list, and the list freed once empty. Only dropping stale
+// references as FOR_OBJ_SLOTS sees them left one list per texture object the game ever made (streamed textures come
+// and go at new addresses, and a finalized object's list was never looked at again).
+static void obj_slot_remove(uint64_t obj, NvnDescPool *d, int id) {
+    pthread_mutex_lock(&g_os_lock);
+    unsigned h = (unsigned)((obj >> 4) ^ (obj >> 18)) & (OS_BUCKETS - 1);
+    for (ObjSlots **p = &g_os[h]; *p; p = &(*p)->next) {
+        ObjSlots *s = *p;
+        if (s->obj != obj) continue;
+        for (int i = 0; i < s->n; i++)
+            if (s->v[i].d == d && s->v[i].id == id) { s->v[i] = s->v[--s->n]; break; }
+        if (!s->n) *p = s->next, free(s->v), free(s);
+        break;
+    }
+    pthread_mutex_unlock(&g_os_lock);
+}
 static void obj_slots_reset(void) {
     pthread_mutex_lock(&g_os_lock);
     for (int h = 0; h < OS_BUCKETS; h++)
@@ -748,6 +768,7 @@ static void register_texture(Cpu *c) {
     int id = (int)A(1);
     if (id < 0 || id >= d->count) return;
     NvnTexEntry *e = &((NvnTexEntry *)d->entries)[id];
+    if (e->guest && e->guest != A(2)) obj_slot_remove(e->guest, d, id);
     e->tex = HOST(NvnTexture, A(2));
     e->guest = A(2);
     obj_slot_add(A(2), d, id);  // (pool_forget / pool_reattach: this object's slots)

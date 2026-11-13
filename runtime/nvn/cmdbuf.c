@@ -108,6 +108,9 @@ static void free_spills_in(uint64_t mem, uint64_t size) {
     }
     pthread_mutex_unlock(&g_spill_lock);
 }
+// A memory pool finalized (objects.c): spills of chunks in it go too - its memory is never added as a chunk again, and
+// before only that freed them
+void cmdbuf_pool_gone(uint64_t mem, uint64_t size) { free_spills_in(mem, size); }
 
 // Reserve a record. May call back into the guest for more memory, so callers snapshot their
 // arguments first.
