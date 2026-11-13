@@ -23,7 +23,7 @@ extern "C" {
 #define RT_BUNDLE_ID "com.zarecomp"             // (data folder on macOS)
 #define RT_APP_NAME "PL:Z-A Recomp"           // window title, messages, the launcher
 #define RT_SHOT_PREFIX "ZA"                    // screenshots' file names (F12)
-#define RT_APP_VERSION "1.1.0-rc1-appimage"    // the release (the GitHub release: LegendsZA-v<version>; + this AppImage build)
+#define RT_APP_VERSION "1.1.0-rc2-appimage"    // the release (the GitHub release: LegendsZA-v<version>; + this AppImage build)
 #define RT_DATA_DIR "zarecomp"                 // Linux data folder (~/.local/share/<this>): one per game
 
 void rt_paths_init(void);         // first thing in main(), after plat_init
