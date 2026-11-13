@@ -1992,7 +1992,7 @@ static void translate_program(void *arg) {
             (double)t_xlat / 1e6, (double)(SDL_GetTicksNS() - t0) / 1e6);
 }
 
-#define PROG_TAB 4096
+#define PROG_TAB 16384
 static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
 // BindProgram(program, stages): the stages in the mask come from `program` (NULL: unbound), the others stay. A bind
@@ -2035,8 +2035,14 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
         return NULL;
     }
     // (word at a time: this runs for every draw)
-    uint64_t in[6] = {np->stages[0].code_addr, np->stages[1].code_addr,
-                      // (and what is at the addresses: a shader archive reloaded elsewhere puts other shaders there, objects.c)
+    // Keyed by what is at the addresses (objects.c content_hash: the code and its constants), not where: Z-A loads the
+    // same effect shaders again at other addresses (one fragment program at 176 in a Rogue Mega battle), and each load
+    // was translated, compiled and given pipelines again - never freed. The address stays in the key where the hash
+    // does not cover all the code (no constants: only its first 4 KB hashed) and for the address-named research overrides.
+    static int by_addr = -1;
+    if (by_addr < 0) by_addr = ENV("LARECOMP_GLSL_OVERRIDE_DIR") || ENV("LARECOMP_EXP_VS_EARLY") || ENV("LARECOMP_PROG_BY_ADDR");
+    uint64_t in[6] = {by_addr || !np->stages[0].const_offset ? np->stages[0].code_addr : 0,
+                      by_addr || !np->stages[1].const_offset ? np->stages[1].code_addr : 0,
                       np->stages[0].content_hash, np->stages[1].content_hash, 0, fkey->tex_stencil};
     memcpy(&in[4], fkey->rt_kind, 8);
     uint64_t h = hash_words(0xcbf29ce484222325ull, in, sizeof in);
