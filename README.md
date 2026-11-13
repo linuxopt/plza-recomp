@@ -46,7 +46,8 @@ affiliated with or endorsed by them.
   (`libvulkan.so.1`: package `vulkan-icd-loader` on Arch, `libvulkan1` on Debian / Ubuntu, `vulkan-loader` on Fedora)
 - **Linux**: glibc 2.31 or newer - Ubuntu 20.04+, Debian 11+, Fedora 32+, Arch / Manjaro / EndeavourOS / CachyOS,
   SteamOS 3, openSUSE Leap 15.3+ / Tumbleweed, Linux Mint 20+, Pop!_OS 20.04+
-- **Disk**: about **25 GB** free during setup (about 8 GB stays: the game data image and the compiled game code)
+- **Disk**: about **13 GB** free during setup on the drive the AppImage is on (about 8 GB stays: the game data
+  image and the compiled game code)
 - **RAM**: 16 GB recommended
 - `curl` or `wget` (only for downloading the cheat database)
 
@@ -71,8 +72,22 @@ Python, the compiler (zig), SDL 3, FFmpeg and shaderc are inside the AppImage.
    ```
 
 If it says **FUSE** is missing, install `fuse3` (or `fuse` / `libfuse2`), or start it with
-`--appimage-extract-and-run`. On **Steam Deck / SteamOS** add it as a non-Steam game (it switches to an X11 window by
-itself so Steam Input works).
+`--appimage-extract-and-run`. On **Steam Deck / SteamOS** see [Steam Deck](#steam-deck) below.
+
+**Put the AppImage in a folder of its own** (e.g. `~/Games/plza-recomp/`): the game files it sets up go into a
+`ZARecomp-data` folder beside it (see [Where your data is](#where-your-data-is)). **Don't start it with `sudo`** - it
+refuses to run as root, because the files it made would belong to root and your user couldn't update them.
+
+### Steam Deck
+
+1. In **Desktop Mode** make a folder for it, e.g. `/home/deck/Games/plza-recomp/` - or on the SD card,
+   `/run/media/deck/<card>/plza-recomp/` (the card must be **ext4** - SteamOS formats it that way - or exFAT; a FAT32
+   card can't hold the 6 GB game image).
+2. Put the AppImage there, make it executable (right-click → Properties → Permissions → *Is executable*) and start it
+   once by double-clicking: set up the game files (below). They go into `plza-recomp/ZARecomp-data/`, so it needs about
+   13 GB free on that drive during setup (~8 GB stays).
+3. Steam → *Add a Non-Steam Game* → *Browse* → the AppImage. It switches to an X11 window by itself so Steam Input
+   works; play it from Game Mode from then on.
 
 **Updating**: download the new AppImage and replace the old file. Your game files, saves and settings stay; if the new
 version needs the game code built again, the launcher does it by itself the first time (a few minutes).
@@ -205,10 +220,14 @@ In game: **Esc** / **F1** asks to close the game, **F11** or Alt+Enter toggles f
 
 Game files, saves, settings, cheats, mods, shader caches and the log `lasrecomp.log` live in the data folder:
 
-- `~/.local/share/zarecomp` by default (`./ZARecomp-*.AppImage --data-dir` prints it);
-- **portable**: create a folder named `ZARecomp-data` next to the AppImage and everything goes there instead (handy
-  for another drive - it needs ~8 GB);
+- a **`ZARecomp-data` folder next to the AppImage** by default - made on the first start, so everything stays in the
+  folder you put the AppImage in (another drive, a Steam Deck's SD card). The launcher shows it at the bottom of
+  GAME FILES (*Open* opens it), and `./ZARecomp-*.AppImage --data-dir` prints it;
+- `~/.local/share/zarecomp` when the AppImage's folder isn't writable (or is FAT32), and for setups made by earlier
+  versions, which keep using it (to move one: move that folder next to the AppImage and rename it `ZARecomp-data`);
 - or set `LARECOMP_DATA_ROOT=/some/folder`.
+
+`--install` copies the AppImage to `~/Applications`; its menu entry keeps using the data folder you had.
 
 | Path | What |
 |---|---|
@@ -230,9 +249,20 @@ To start over, delete `extracted/` (your saves stay).
   Switch and dump the update again.
 - **"No keys found" / "Your keys can't open those game files"** - pick your `prod.keys` in the prod.keys row; dump it
   again from your Switch on its current system version if it is older than the update.
+- **"Not enough free space for the game files"** - the launcher checks before it starts and shows how much is free
+  in which folder. Free some space, or move the AppImage to a bigger drive (its `ZARecomp-data` folder moves with it).
+- **"The data folder is on a FAT32 drive"** - FAT32 holds at most 4 GB a file; the game image is 6 GB. Use an ext4
+  or exFAT drive (Steam Deck: *Settings → System → Format SD card* makes it ext4 - this erases the card).
+- **"Can't write to the data folder"** / setup fails right away on a Steam Deck - it was probably started with `sudo`
+  once, which made the folder root's. Give it back: `sudo chown -R $USER <the folder it names>`, then start the
+  AppImage normally.
 - **Setup fails while compiling** - check there is space in the data folder, then look at the end of `lasrecomp.log`.
 - **Stutters the first time** - shaders are compiled as new things appear; they are cached for later. For a frame time
   overlay start it with MangoHud: `mangohud ./ZARecomp-*-x86_64.AppImage`.
+- **Crashes or freezes at 1440p and above** - the game's memory now grows with the screen: above 1080p it gets
+  4.5 GB plus room for the shadows / draw distance options (before, 1440p was left at the Switch's 2.75 GB). If it
+  still crashes there, start it with more:
+  `LARECOMP_ZA_HEAP_MB=6144 ./ZARecomp-*-x86_64.AppImage` (at most 6656).
 - **Code cheats do nothing** - the CHEATS page says if the game code needs a *Recompile game code* for the current
   cheat file.
 - **A freeze or crash** - attach `lasrecomp.log` (and `lasrecomp-prev.log`) when you report it in the Issues.

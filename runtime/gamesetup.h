@@ -32,7 +32,11 @@ enum {
     SETUP_FAIL_KEYS_OLD,    // the keys can't open them (older than the game, or no ticket / title key)
     SETUP_FAIL_NO_BASE,     // the update's package without the base game's
     SETUP_FAIL_UNPACK,      // a package couldn't be read (damaged, or a layout runtime/nxpkg.c doesn't read)
+    SETUP_FAIL_SPACE,       // not enough free space in the data folder (checked before starting: setup_fail_detail)
+    SETUP_FAIL_FAT,         // the data folder is on FAT32 (4 GB a file: the RomFS image is 6 GB)
 };
+// A failure's particulars for the player (free space and the data folder; "" none).
+const char *setup_fail_detail(void);
 
 // The game files in <data root>/extracted: ready to play (exefs, romfs.bin and game code built for this version).
 bool setup_ready(void);

@@ -790,13 +790,15 @@ void za_fixes_configure(const char *exefs) {
     { extern void za_jobs_configure(void); za_jobs_configure(); }
     { extern void za_press_configure(void); za_press_configure(); }  // (hle/za_press.c: presses the battle text misses)
     rt_register_fnhook_at(ZA_CONFIG_READ, config_read);
-    {   // a screen above 1440p needs more than the Switch's memory for its targets (4K: the StandardAllocator ran out)
+    {   // a screen above 1080p needs more than the Switch's memory for its targets (4K: the StandardAllocator ran out).
+        // 1440p too: its screen-sized buffers are 1.78x 1080p's - on the Switch's 2.75 GB players hit the same out of
+        // memory (LARECOMP_ZA_HEAP_MB=6144 steadied it). The block is backed on demand: unused room costs nothing.
         uint64_t sw, sh;
         za_screen_size(&sw, &sh);
         const char *e = getenv("LARECOMP_ZA_HEAP_MB");
         if (e) g_stdheap_size = strtoull(e, NULL, 0) << 20;
         else if (sh > 2160) g_stdheap_size = HEAP_MAX;  // (capped to the window by heaps.c)
-        else if (sh > 1440) g_stdheap_size = 0x120000000ull;  // 4.5 GB (4K's route ran in 4 GB, not in 2.75)
+        else if (sh > 1080) g_stdheap_size = 0x120000000ull;  // 4.5 GB (4K's route ran in 4 GB, not in 2.75)
         if (!e && g_settings.shadows > 0)  // (bigger shadow maps come out of it too: 2048 +60 MB, 4096 +240 MB)
             g_stdheap_size += g_settings.shadows == 2 ? 0x10000000ull : 0x4000000ull;
         // (and the characters Draw Distance lets in: Max at 1440p with Ultra shadows ran out opening the menu)

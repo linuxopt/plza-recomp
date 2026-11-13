@@ -15,6 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <sys/statvfs.h>
+#include <sys/vfs.h>
+#endif
 
 #include "gamebuild.h"
 #include "gamelib.h"
@@ -284,9 +288,55 @@ static bool dlc_dir(const char *base, bool need_key, char *out, size_t n) {
     return true;
 }
 
+// Room for the setup, checked before anything is deleted or written (a Steam Deck's 64 GB storage, a FAT32 SD card):
+// the RomFS image (6.0 GB, one file), the game code (1.6 GB) and the build's work files beside it while it compiles.
+// The game files already set up are replaced, so their room counts as free.
+#define SETUP_NEED_FULL (13ull << 30)  // (measured: 11.0 GB at the peak, a flat dump on Linux)
+#define SETUP_NEED_CODE (6ull << 30)   // (the build: ~5.3 GB; the old game code it replaces counts as free)
+static char g_fail_detail[1400];
+const char *setup_fail_detail(void) { return g_fail_detail; }
+static unsigned long long file_bytes(const char *p) {
+    struct stat sb;
+    return stat(p, &sb) == 0 ? (unsigned long long)sb.st_size : 0;
+}
+static bool room_ok(bool full) {
+    g_fail_detail[0] = 0;
+#ifndef _WIN32
+    const char *root = rt_data_root();
+    struct statfs fs;
+    if (full && statfs(".", &fs) == 0 && fs.f_type == 0x4d44) {  // (MSDOS_SUPER_MAGIC: FAT16/32, at most 4 GB a file)
+        snprintf(g_fail_detail, sizeof g_fail_detail, "%s", root);
+        LOG("[setup] %s is on FAT32: the 6 GB RomFS image can't be written there\n", root);
+        g_state = SETUP_FAIL_FAT;
+        return false;
+    }
+    struct statvfs v;
+    if (statvfs(".", &v) != 0) return true;
+    unsigned long long avail = (unsigned long long)v.f_bavail * v.f_frsize;
+    unsigned long long reuse = file_bytes(ROOT "/lasgame.so") + (full ? file_bytes(ROOT "/romfs.bin") + file_bytes(ROOT "/dlc.bin") : 0);
+    unsigned long long need = full ? SETUP_NEED_FULL : SETUP_NEED_CODE;
+    LOG("[setup] %s: %.1f GB free (+%.1f GB of game files replaced), %.1f GB needed\n", root, avail / 1073741824.0,
+        reuse / 1073741824.0, need / 1073741824.0);
+    if (avail + reuse < need) {
+        snprintf(g_fail_detail, sizeof g_fail_detail, "%.1f GB free of the %.0f GB needed in %s", (avail + reuse) / 1073741824.0,
+                 need / 1073741824.0, root);
+        g_state = SETUP_FAIL_SPACE;
+        return false;
+    }
+#else
+    (void)full;
+#endif
+    return true;
+}
+
 static void *setup_thread(void *arg) {
     (void)arg;
     g_progress = 0;
+    if (!room_ok(g_files_mode || g_folder[0])) {
+        LOG("[setup] failed: %s\n", g_fail_detail);
+        g_running = false;
+        return NULL;
+    }
     if (g_files_mode) {  // (the packages picked one by one: straight to reading them)
         if (from_packages() && build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
         LOG("[setup] %s\n", g_state == SETUP_DONE ? "ready" : "failed");

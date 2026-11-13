@@ -8,20 +8,36 @@
 #   ZARecomp.AppImage --uninstall     remove that menu entry (game files, saves and settings stay)
 #   ZARecomp.AppImage --data-dir      print the data folder (game files, saves, settings, lasrecomp.log)
 #
-# Data folder: LARECOMP_DATA_ROOT if set; else a "ZARecomp-data" folder beside the AppImage, when there is one
-# (portable: make that folder to keep everything on another drive); else ~/.local/share/zarecomp.
+# Data folder (the extracted game files, the recompiled game code, saves, settings): LARECOMP_DATA_ROOT if set; else a
+# "ZARecomp-data" folder beside the AppImage - made there on the first start when that folder is writable and not
+# FAT32 (the game image is one 6 GB file), so it all stays in the folder you put the AppImage in (a Steam Deck's SD
+# card, say); an older setup in ~/.local/share/zarecomp keeps being used; else ~/.local/share/zarecomp.
+# Never as root (sudo): the files would belong to root and the next normal start couldn't write them.
 set -u
 HERE="$(dirname "$(readlink -f "$0")")"
 APP="$HERE/opt/zarecomp"
 SELF="${APPIMAGE:-$0}"
 NAME="PL:Z-A Recomp"
 
-if [ -z "${LARECOMP_DATA_ROOT:-}" ] && [ -n "${APPIMAGE:-}" ] && [ -d "$(dirname "$APPIMAGE")/ZARecomp-data" ]; then
-    export LARECOMP_DATA_ROOT="$(dirname "$APPIMAGE")/ZARecomp-data"
+if [ -n "${XDG_DATA_HOME:-}" ] && [ "${XDG_DATA_HOME#/}" != "$XDG_DATA_HOME" ]; then HOMEDATA="$XDG_DATA_HOME/zarecomp"
+else HOMEDATA="${HOME:-/tmp}/.local/share/zarecomp"; fi
+usable() { [ -d "$1" ] && [ -w "$1" ] && [ -x "$1" ]; }  # (a folder this user can write to)
+if [ -z "${LARECOMP_DATA_ROOT:-}" ]; then
+    BESIDE=""
+    if [ -n "${APPIMAGE:-}" ]; then
+        dir="$(dirname "$(readlink -f "$APPIMAGE")")"
+        BESIDE="$dir/ZARecomp-data"
+        fs="$(stat -f -c %T "$dir" 2>/dev/null)"
+        case "$dir" in /tmp|/tmp/*|/usr|/usr/*|/opt|/opt/*|/proc*|/sys*) BESIDE="" ;; esac
+        [ -n "$BESIDE" ] && ! usable "$BESIDE" && { ! usable "$dir" || [ "$fs" = msdos ] || [ "$fs" = vfat ]; } && BESIDE=""
+    fi
+    if [ -n "$BESIDE" ] && [ -d "$BESIDE" ]; then DATA="$BESIDE"                     # (made earlier, or by the player)
+    elif usable "$HOMEDATA" && { [ -d "$HOMEDATA/extracted" ] || [ -f "$HOMEDATA/larecomp.ini" ]; }; then DATA="$HOMEDATA"  # (an older setup)
+    elif [ -n "$BESIDE" ]; then DATA="$BESIDE"
+    else DATA="$HOMEDATA"; fi
+    export LARECOMP_DATA_ROOT="$DATA"
 fi
-if [ -n "${LARECOMP_DATA_ROOT:-}" ]; then DATA="$LARECOMP_DATA_ROOT"
-elif [ -n "${XDG_DATA_HOME:-}" ] && [ "${XDG_DATA_HOME#/}" != "$XDG_DATA_HOME" ]; then DATA="$XDG_DATA_HOME/zarecomp"
-else DATA="${HOME:-/tmp}/.local/share/zarecomp"; fi
+DATA="$LARECOMP_DATA_ROOT"
 
 case "${1:-}" in
 --data-dir) echo "$DATA"; exit 0 ;;
@@ -32,7 +48,9 @@ case "${1:-}" in
     [ "$(readlink -f "$APPIMAGE")" = "$(readlink -f "$dest" 2>/dev/null)" ] || cp -f "$APPIMAGE" "$dest"
     chmod +x "$dest"
     cp -f "$HERE/zarecomp.png" "$HOME/.local/share/icons/hicolor/256x256/apps/zarecomp.png"
-    sed -e "s|^Exec=.*|Exec=\"$dest\" %U|" -e "s|^TryExec=.*||" "$HERE/zarecomp.desktop" > "$HOME/.local/share/applications/zarecomp.desktop"
+    # (the menu entry keeps this data folder: the copy in ~/Applications would otherwise make a new one beside itself)
+    esc="$(printf '%s' "$DATA" | sed 's/[\\|&]/\\&/g')"  # (for the sed below)
+    sed -e "s|^Exec=.*|Exec=env \"LARECOMP_DATA_ROOT=$esc\" \"$dest\" %U|" -e "s|^TryExec=.*||" "$HERE/zarecomp.desktop" > "$HOME/.local/share/applications/zarecomp.desktop"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$HOME/.local/share/applications" || true
     echo "Installed: $dest (menu: $NAME). Data folder: $DATA"
     exit 0 ;;
@@ -50,6 +68,10 @@ msg() {
     elif command -v kdialog >/dev/null 2>&1; then kdialog --title "$NAME" --error "$1" 2>/dev/null
     fi
 }
+if [ "$(id -u)" = 0 ] && [ -z "${LARECOMP_ALLOW_ROOT:-}" ]; then
+    msg "Don't start it as root (sudo): the game files would belong to root and couldn't be written by your user afterwards. Start it as your normal user (on a Steam Deck: the deck user, from Desktop Mode or Steam). If an earlier sudo start left files owned by root, give them back with: sudo chown -R \$USER \"$DATA\""
+    exit 1
+fi
 grep -qw avx2 /proc/cpuinfo || { msg "This needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Zen or newer)."; exit 1; }
 if ! ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1' && ! ls /usr/lib*/libvulkan.so.1 /usr/lib/*/libvulkan.so.1 >/dev/null 2>&1; then
     msg "No Vulkan loader (libvulkan.so.1) found. Install your distribution's Vulkan package (vulkan-icd-loader / libvulkan1 / vulkan-loader) and a Vulkan 1.3 GPU driver."
@@ -58,7 +80,10 @@ fi
 
 # The shipped plugins (Steam relay, Legends Lua) into the data folder's plugins/ - the runtime lists that folder; they
 # stay off until switched on on the Mods page. Newer copies replace older ones; plugins the player added stay.
-mkdir -p "$DATA/plugins" "$DATA/lua" "$DATA/mods" 2>/dev/null
+if ! mkdir -p "$DATA/plugins" "$DATA/lua" "$DATA/mods" 2>/dev/null || ! usable "$DATA"; then
+    msg "Can't write to the data folder $DATA. If an earlier start as root (sudo) made it, give it back to your user: sudo chown -R \$USER \"$DATA\" - or move the AppImage into a folder of your own (e.g. ~/Games/plza-recomp) and start it from there."
+    exit 1
+fi
 for f in "$APP"/plugins/*; do
     [ -f "$f" ] || continue
     d="$DATA/plugins/$(basename "$f")"

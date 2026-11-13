@@ -589,6 +589,12 @@ static void game_files_pickers(SDL_Window *win, bool ready) {
     if (ImGui::Button(T("Select game folder...", "Selecionar pasta do jogo..."), ImVec2(-FLT_MIN, 0)))
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
     ImGui::EndDisabled();
+    // where the extracted files and the recompiled game code go (the data folder: beside the AppImage, tools/linux/AppRun)
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s %s", T("Game files, saves and settings go to:", "Arquivos do jogo, saves e configurações ficam em:"), rt_data_root());
+    ImGui::SameLine();
+    if (ImGui::SmallButton(T("Open", "Abrir"))) open_folder("");
 }
 
 static void game_files_section(SDL_Window *win) {
@@ -628,35 +634,42 @@ static void game_files_section(SDL_Window *win) {
                                          "The game code didn't build.", "The game code builder is missing from this copy.",
                                          "This needs Pokémon Legends: Z-A version 2.0.2; those files are another version.",
                                          "No keys found for those game files (prod.keys).", "Your keys can't open those game files.",
-                                         "Only the update was found, not the base game.", "Those game files couldn't be read."};
+                                         "Only the update was found, not the base game.", "Those game files couldn't be read.",
+                                         "Not enough free space for the game files.", "The data folder is on a FAT32 drive."};
         static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo comprimidos (.nsz / .xcz).",
                                          "Esse não é um jogo suportado (Pokémon Legends: Z-A).", "Os arquivos não puderam ser copiados.",
                                          "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia.",
                                          "É preciso o Pokémon Legends: Z-A versão 2.0.2; esses arquivos são de outra versão.",
                                          "Nenhuma chave encontrada para esses arquivos (prod.keys).", "As suas chaves não abrem esses arquivos.",
-                                         "Só a atualização foi encontrada, não o jogo base.", "Esses arquivos do jogo não puderam ser lidos."};
+                                         "Só a atualização foi encontrada, não o jogo base.", "Esses arquivos do jogo não puderam ser lidos.",
+                                         "Não há espaço livre suficiente para os arquivos do jogo.", "A pasta de dados está num disco FAT32."};
         static const char *const en_h[] = {"Pick your base game, its 2.0.2 update and prod.keys below, or a folder that holds exefs and romfs.",
                                            "Decompress them first (nsz -D), or dump them as .nsp / .xci.",
-                                           "Pick the folder of your own Pokémon Legends: Z-A.", "Check there are about 6 GB free and try again.",
-                                           "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again.",
+                                           "Pick the folder of your own Pokémon Legends: Z-A.", "Check there are about 13 GB free and try again.",
+                                           "Check there are about 6 GB free and try again; details in lasrecomp.log.", "Download the release again.",
                                            "Update the game to 2.0.2 on your Switch, dump the base game and the update, and put both in one folder (README).",
                                            "Dump prod.keys from your own Switch and pick it below (prod.keys).",
                                            "Dump prod.keys again from your Switch on its current system version; details in lasrecomp.log.",
                                            "Pick the base game's .nsp / .xci as well as the update.",
-                                           "The dump may be damaged; details in lasrecomp.log."};
+                                           "The dump may be damaged; details in lasrecomp.log.",
+                                           "Free some space, or put the AppImage in a folder on a bigger drive (an SD card works): the game files go to a ZARecomp-data folder beside it.",
+                                           "FAT32 can't hold the 6 GB game image. Format the SD card as ext4 (Steam Deck: Settings > System > Format SD card) or exFAT, or keep the AppImage on the internal drive."};
         static const char *const pt_h[] = {"Escolha a pasta com os seus arquivos .nsp / .xci, ou a que tem exefs e romfs.",
                                            "Descomprima antes (nsz -D), ou faça o dump como .nsp / .xci.",
-                                           "Escolha a pasta do seu Pokémon Legends: Z-A.", "Confira se há uns 6 GB livres e tente de novo.",
-                                           "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo.",
+                                           "Escolha a pasta do seu Pokémon Legends: Z-A.", "Confira se há uns 13 GB livres e tente de novo.",
+                                           "Confira se há uns 6 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo.",
                                            "Atualize o jogo para a 2.0.2 no Switch, faça o dump do jogo base e da atualização e coloque os dois numa pasta (README).",
                                            "Faça o dump do prod.keys do seu próprio Switch e coloque junto dos arquivos do jogo (ou em .switch na sua pasta pessoal).",
                                            "Faça o dump do prod.keys de novo no Switch com a versão atual do sistema; detalhes no lasrecomp.log.",
                                            "Coloque o .nsp / .xci do jogo base na mesma pasta da atualização.",
-                                           "O dump pode estar danificado; detalhes no lasrecomp.log."};
+                                           "O dump pode estar danificado; detalhes no lasrecomp.log.",
+                                           "Libere espaço, ou coloque o AppImage numa pasta de um disco maior (um cartão SD serve): os arquivos do jogo vão para uma pasta ZARecomp-data ao lado dele.",
+                                           "FAT32 não comporta a imagem de 6 GB do jogo. Formate o cartão SD como ext4 (Steam Deck: Configurações > Sistema > Formatar cartão SD) ou exFAT, ou deixe o AppImage no disco interno."};
         int k = st - SETUP_FAIL_NOT_FOUND;
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 900);
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
+        if (setup_fail_detail()[0]) ImGui::TextDisabled("%s", setup_fail_detail());
         ImGui::PopTextWrapPos();
     }
     game_files_pickers(win, ready);
