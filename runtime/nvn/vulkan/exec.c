@@ -2871,6 +2871,9 @@ double vk_gpu_ms(void) {
 // ================================================================== feedback snapshots (renderer.m resolve_feedback)
 static NvnTexture *feedback_tex[4];
 static VkImageView feedback_view[4];
+// (and the image and levels each view is of: a slot reading the texture in stencil mode gets that image's stencil instead)
+static TexBackend *feedback_img[4];
+static uint32_t feedback_nlv[4];
 static int nfeedback;
 static uint64_t g_cur_fs_hash;
 static NvnTexture *snap_tex[8];
@@ -3120,6 +3123,7 @@ static void resolve_feedback(Prog *pr) {
                     VkImageView v = lv <= src->levels ? vk_image_view(src, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, lv, 0, 1, id, sa) : VK_NULL_HANDLE;
                     if (v) {
                         feedback_tex[nfeedback] = t;
+                        feedback_img[nfeedback] = src, feedback_nlv[nfeedback] = lv;
                         feedback_view[nfeedback++] = v;
                         static int logged;
                         if (!logged++) LOG("[vk] mip chain built in place (first: level %u of a %ux%u %s texture reads levels 0..%u)\n", lv,
@@ -3143,6 +3147,7 @@ static void resolve_feedback(Prog *pr) {
             static const VkComponentMapping id = {0};
             if (!nosnap && si >= 0 && (snap_ok[si] || self_write) && existing) {
                 feedback_tex[nfeedback] = t;
+                feedback_img[nfeedback] = &existing->copy, feedback_nlv[nfeedback] = 1;
                 feedback_view[nfeedback++] = vk_image_view(&existing->copy, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, 1, 0, 1, id, sa);
                 continue;
             }
@@ -3165,6 +3170,7 @@ static void resolve_feedback(Prog *pr) {
                 cb = vk_cmd();
             }
             feedback_tex[nfeedback] = t;
+            feedback_img[nfeedback] = dst, feedback_nlv[nfeedback] = 1;
             feedback_view[nfeedback++] = vk_image_view(dst, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, 1, 0, 1, id, sa);
             if (si < 0) { static int rr; si = rr++ & 7; snap_tex[si] = t; }
             snap_ok[si] = true;
@@ -3765,6 +3771,15 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
             for (int k = 0; k < nfeedback; k++)
                 if (e->tex == feedback_tex[k] && (st_->type == TEXTYPE_2D || st_->type == TEXTYPE_2D_ARRAY)) {
                     view = feedback_view[k];
+                    // A depth-stencil texture read in stencil mode (Z-A's decals: the stencil's material id says which
+                    // surfaces they skip) gets the stencil of the snapshot, not its depth: as depth, the low bits of the
+                    // floats made the blob shadows land in stripes on the Mega crystals' rocks they should have skipped
+                    uint32_t dsm = e->has_view && (e->view.setmask & 16) ? e->view.ds_mode : e->tex->ds_mode;
+                    TexBackend *fb = feedback_img[k];
+                    if (dsm == 1 && fb && (fb->aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                        static const VkComponentMapping id = {0};
+                        view = vk_image_view(fb, VK_IMAGE_VIEW_TYPE_2D, fb->format, 0, feedback_nlv[k], 0, 1, id, VK_IMAGE_ASPECT_STENCIL_BIT);
+                    }
                     if (st_->type == TEXTYPE_2D_ARRAY) view = vk_dummy_view(TEXTYPE_2D_ARRAY);  // (2D snapshot as array: rare)
                 }
         }
