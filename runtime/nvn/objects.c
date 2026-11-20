@@ -538,6 +538,17 @@ static void obj_slot_remove(uint64_t obj, NvnDescPool *d, int id) {
     }
     pthread_mutex_unlock(&g_os_lock);
 }
+// (g_os_lock held) obj's list freed if nothing is left on it: FOR_OBJ_SLOTS drops stale references too, and a list it
+// emptied stayed allocated (PR #1 frees those obj_slot_remove empties; these are the rest)
+static void obj_slots_free_if_empty(uint64_t obj) {
+    unsigned h = (unsigned)((obj >> 4) ^ (obj >> 18)) & (OS_BUCKETS - 1);
+    for (ObjSlots **p = &g_os[h]; *p; p = &(*p)->next)
+        if ((*p)->obj == obj) {
+            ObjSlots *s = *p;
+            if (!s->n) *p = s->next, free(s->v), free(s);
+            return;
+        }
+}
 static void obj_slots_reset(void) {
     pthread_mutex_lock(&g_os_lock);
     for (int h = 0; h < OS_BUCKETS; h++)
@@ -556,6 +567,7 @@ static void obj_slots_reset(void) {
             body;                                                                         \
             i_++;                                                                         \
         }                                                                                 \
+        if (s_ && !s_->n) obj_slots_free_if_empty(obj);                                   \
         pthread_mutex_unlock(&g_os_lock);                                                 \
     } while (0)
 
