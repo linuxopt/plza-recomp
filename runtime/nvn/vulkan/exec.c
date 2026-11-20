@@ -49,6 +49,9 @@ uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
 static _Atomic int stat_compiles;
+// (research: how many programs / pipelines / pipeline parts are kept, logged as "[cache]" when they change; they are
+// never released - Z-A's Rogue Mega battles made ~40000 parts in 10 minutes, host memory 7 -> 12 GB)
+static _Atomic uint64_t g_cache_progs, g_cache_pipes, g_cache_libs, g_cache_pipes_replaced;
 static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU time translating / compiling programs
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
@@ -907,6 +910,15 @@ const char *renderer_stats(void) {
         for (int i = 0; i < CMD_COUNT; i++) if (op_counts[i]) LOG(" %d:%llu", i, (unsigned long long)op_counts[i]);
         LOG("\n");
     }
+    {
+        static uint64_t last_p, last_q, last_l;
+        uint64_t p = atomic_load(&g_cache_progs), q = atomic_load(&g_cache_pipes), l = atomic_load(&g_cache_libs);
+        if (p != last_p || q != last_q || l != last_l)
+            LOG("[cache] programs %llu (+%llu), pipelines %llu (+%llu, %llu replaced in a full table), pipeline parts %llu (+%llu)\n",
+                (unsigned long long)p, (unsigned long long)(p - last_p), (unsigned long long)q, (unsigned long long)(q - last_q),
+                (unsigned long long)atomic_load(&g_cache_pipes_replaced), (unsigned long long)l, (unsigned long long)(l - last_l));
+        last_p = p, last_q = q, last_l = l;
+    }
     snprintf(stats_text, sizeof stats_text,
              "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d (translate %.0fms, spirv %.0fms, pipelines %.0fms, draws waited %.0fms), fbcopy %llu, upload %.1fMB",
              (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
@@ -1566,6 +1578,7 @@ typedef struct {
     bool fs_hash_ok;
     bool warm;          // (vk_warm_program's: released right after, no pipeline parts)
     uint64_t dbg_id[2], dbg_spv[2];  // (LARECOMP_WARMUP_LOG: program hashes, SPIR-V hashes)
+    uint64_t content[2];  // (LARECOMP_LOG_PIPEKEYS: the stages' content hashes)
 } Prog;
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
@@ -1979,7 +1992,7 @@ static void translate_program(void *arg) {
             (double)t_xlat / 1e6, (double)(SDL_GetTicksNS() - t0) / 1e6);
 }
 
-#define PROG_TAB 4096
+#define PROG_TAB 16384
 static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
 // BindProgram(program, stages): the stages in the mask come from `program` (NULL: unbound), the others stay. A bind
@@ -2022,8 +2035,14 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
         return NULL;
     }
     // (word at a time: this runs for every draw)
-    uint64_t in[6] = {np->stages[0].code_addr, np->stages[1].code_addr,
-                      // (and what is at the addresses: a shader archive reloaded elsewhere puts other shaders there, objects.c)
+    // Keyed by what is at the addresses (objects.c content_hash: the code and its constants), not where: Z-A loads the
+    // same effect shaders again at other addresses (one fragment program at 176 in a Rogue Mega battle), and each load
+    // was translated, compiled and given pipelines again - never freed. The address stays in the key where the hash
+    // does not cover all the code (no constants: only its first 4 KB hashed) and for the address-named research overrides.
+    static int by_addr = -1;
+    if (by_addr < 0) by_addr = ENV("LARECOMP_GLSL_OVERRIDE_DIR") || ENV("LARECOMP_EXP_VS_EARLY") || ENV("LARECOMP_PROG_BY_ADDR");
+    uint64_t in[6] = {by_addr || !np->stages[0].const_offset ? np->stages[0].code_addr : 0,
+                      by_addr || !np->stages[1].const_offset ? np->stages[1].code_addr : 0,
                       np->stages[0].content_hash, np->stages[1].content_hash, 0, fkey->tex_stencil};
     memcpy(&in[4], fkey->rt_kind, 8);
     uint64_t h = hash_words(0xcbf29ce484222325ull, in, sizeof in);
@@ -2060,13 +2079,16 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
         for (int i = 0; i < 32; i++) ak[i] = (char)('0' + vkey->attr_kind[i]);
         for (int i = 0; i < 8; i++) rk[i] = (char)('0' + fkey->rt_kind[i]);
         ak[32] = rk[8] = 0;
-        LOG("[prog] vs %016llx fs %016llx attr %s rt %s xfb %u img %llx/%llx stencil %x/%x\n", (unsigned long long)np->stages[0].content_hash,
-            (unsigned long long)np->stages[1].content_hash, ak, rk, vkey->xfb_count[0], (unsigned long long)*(uint64_t *)vkey->img_kind,
+        LOG("[prog] vs %016llx@%llx fs %016llx@%llx attr %s rt %s xfb %u img %llx/%llx stencil %x/%x\n", (unsigned long long)np->stages[0].content_hash,
+            (unsigned long long)np->stages[0].code_addr, (unsigned long long)np->stages[1].content_hash,
+            (unsigned long long)np->stages[1].code_addr, ak, rk, vkey->xfb_count[0], (unsigned long long)*(uint64_t *)vkey->img_kind,
             (unsigned long long)*(uint64_t *)fkey->img_kind, vkey->tex_stencil, fkey->tex_stencil);
     }
     Prog *p = calloc(1, sizeof *p);
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
+    atomic_fetch_add(&g_cache_progs, 1);
+    p->content[0] = np->stages[0].content_hash, p->content[1] = np->stages[1].content_hash;
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
@@ -2324,7 +2346,7 @@ typedef struct {
 } PipeIn;
 static Pipe *g_pipe_memo;
 static PipeIn g_pipe_memo_in;
-#define PIPE_TAB 8192
+#define PIPE_TAB 65536  // (8192 filled up in a long Z-A session: the lookup below then never ended)
 static struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
 
 // 8 bytes a step (PipeKey is ~700 bytes, hashed per draw); in-memory tables only - hmix values are compared with
@@ -2563,6 +2585,7 @@ static VkPipeline lib_get(uint64_t key, int part, const PipeKey *k) {
         l = calloc(1, sizeof *l);
         l->key = key;
         lib_tab[sl].key = key, lib_tab[sl].lib = l, lib_count++;
+        atomic_fetch_add(&g_cache_libs, 1);
         mine = true;
     }
     pthread_mutex_unlock(&lib_lock);
@@ -4566,9 +4589,30 @@ static void draw_(CmdRec *r, bool indexed) {
     uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
     if (!ph) ph = 1;
     uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
-    while (pipe_tab[pslot].key && pipe_tab[pslot].key != ph) pslot = (pslot + 1) & (PIPE_TAB - 1);
+    for (int probe = 0; pipe_tab[pslot].key && pipe_tab[pslot].key != ph; probe++) {
+        if (probe == 64) {  // (full run of slots: the entry is replaced, its Pipe kept - draws may still use it)
+            pipe_tab[pslot].key = 0, pipe_tab[pslot].pipe = NULL;
+            atomic_fetch_add(&g_cache_pipes_replaced, 1);
+            break;
+        }
+        pslot = (pslot + 1) & (PIPE_TAB - 1);
+    }
     pp = pipe_tab[pslot].pipe;
     if (!pp) {
+        static int log_keys = -1;
+        if (log_keys < 0) log_keys = ENV("LARECOMP_LOG_PIPEKEYS") != NULL;
+        if (log_keys) {  // (research: which part of the key makes each new pipeline new - grouped by program offline)
+            #define KH(...) (unsigned)(hash_words(0xcbf29ce484222325ull, __VA_ARGS__) >> 32)
+            LOG("[pipekey] f%llu prog %p vs %016llx@%llx fs %016llx@%llx rt %08x va %08x st %08x bl %08x wm %08x topo %u fill %u dc %u\n",
+                (unsigned long long)renderer_game_frame(), (void *)k.prog, (unsigned long long)k.prog->content[0],
+                (unsigned long long)k.prog->code[0], (unsigned long long)k.prog->content[1], (unsigned long long)k.prog->code[1],
+                KH(k.color, sizeof k.color + sizeof k.depth + sizeof k.stencil + sizeof k.ncolor + sizeof k.samples),
+                KH(k.attr_fmt, sizeof k.attr_fmt + sizeof k.attr_off + sizeof k.attr_bind + sizeof k.attr_mask),
+                KH(k.stride, sizeof k.stride + sizeof k.divisor + sizeof k.used_streams),
+                KH(k.blend, sizeof k.blend + 2), KH(k.write_mask, sizeof k.write_mask), k.topo_class, k.poly_fill, k.depth_clamp);
+            #undef KH
+        }
+        atomic_fetch_add(&g_cache_pipes, 1);
         pp = calloc(1, sizeof *pp);
         pp->k = k;
         pp->t_asked = SDL_GetTicksNS();

@@ -57,6 +57,27 @@ static void drop_buf(VEnt *e) {
     e->buf = VK_NULL_HANDLE;
 }
 
+// Ranges no draw has asked for in a while. The game's streamed geometry comes and goes at new addresses, and every range
+// drawn once kept its entry and edge shadow (up to 8 KB) until a reboot - drop_buf only gives back the VRAM - so host
+// memory grew with the ground covered (Z-A, Lumiose: GBs over a long session, until the desktop was OOM-killed). Every
+// 600 frames: copies not drawn for 3600 frames give back their VRAM (below the budget too: the game has likely reused
+// that memory for something else), and entries without a copy not asked for in 600 frames go. Volatile ones wait for
+// their window to end (the next draw would reset them then anyway).
+static void sweep(uint64_t frame) {
+    for (int b = 0; b < NBUCKET; b++)
+        for (VEnt **p = &g_tab[b]; *p;) {
+            VEnt *e = *p;
+            if (e->buf && frame - e->used_frame > 3600) drop_buf(e);
+            if (!e->buf && frame - e->used_frame > 600 && (!e->vol || frame - e->vol_frame >= 300)) {
+                *p = e->next;
+                free(e->shadow);
+                free(e);
+            } else {
+                p = &e->next;
+            }
+        }
+}
+
 static bool enabled(void) {
     static int on = -1;
     if (on < 0) {
@@ -139,6 +160,8 @@ bool vcache_get(uint64_t addr, uint64_t len, VkBuffer *buf, VkDeviceSize *off) {
                 for (VEnt *e = g_tab[b]; e; e = e->next)
                     if (e->buf && frame - e->used_frame > 120) drop_buf(e);
         }
+        static uint64_t swept;  // (a frame with no draws here never comes through: not frame % 600)
+        if (frame - swept >= 600) swept = frame, sweep(frame);
     }
     uint32_t h = (uint32_t)(((addr >> 4) ^ (len * 0x9E3779B1u)) * 0x9E3779B1u) & (NBUCKET - 1);
     VEnt *e = g_tab[h];
